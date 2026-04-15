@@ -1,0 +1,2 @@
+start,end,observed_hours,expected_hours,missing_hours,longest_run_hours
+2022-07-22 11:00:00,2023-02-10 15:00:00,272,4877,4605,10

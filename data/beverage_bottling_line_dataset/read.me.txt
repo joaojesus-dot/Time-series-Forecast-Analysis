@@ -1,0 +1,194 @@
+This dataset contains time-resolved operational records from an industrial manufacturing process, covering the period from July 2022 to February 2023. The data describe production activity, operational time, downtime, and efficiency metrics at daily and hourly resolutions.
+
+The dataset includes structured tables reporting production volumes, monitored time, effective operation time, and downtime, as well as derived efficiency indicators. All timestamps were standardized, and numerical values are provided in consistent units to facilitate reuse and reproducibility.
+
+These data were collected during real industrial operation using an Industrial Internet of Things (IIoT) monitoring system and were used as supporting material in a previously published research article focused on the analysis of production efficiency and operational behavior using deep learning algorithms, including LSTM, GRU, and SCINet. While the associated article presents aggregated analyses and interpretations, this dataset provides the underlying structured records to enable independent inspection, replication of results, or alternative analyses.
+
+The dataset is intended for use in studies related to industrial engineering, manufacturing systems, operational efficiency analysis, and time-series modeling. No sensitive or personally identifiable information is included.
+
+Technical info (English)
+Dataset Informations
+
+
+Dataset title
+-------------
+Industrial Production Time-Series Dataset from a Beverage Bottling Line (2022–2023)
+
+DOI
+---
+https://doi.org/10.5281/zenodo.18146866
+
+Overview
+--------
+This dataset contains time-resolved operational records collected from a real industrial manufacturing
+process, covering the period from July 2022 to February 2023. The data describe production activity,
+operational time, downtime events, and efficiency metrics at hourly and daily resolutions.
+
+The dataset was collected using an Industrial Internet of Things (IIoT) monitoring system installed on
+an industrial filling machine operating under real production conditions.
+
+Purpose and context
+-------------------
+The dataset was used as supporting material for the following peer-reviewed article:
+
+"IoT-Driven Deep Learning for Enhanced Industrial Production Forecasting"
+G. Augusto David et al., IEEE Internet of Things Journal, 2024.
+DOI: 10.1109/JIOT.2024.3447579
+
+While the associated article presents aggregated analyses and forecasting results based on deep learning
+models (LSTM, GRU, and SCINet), this dataset provides the underlying structured operational records to
+enable independent inspection, replication of results, and alternative analyses.
+
+Data acquisition and preprocessing
+----------------------------------
+Production counting is performed by monitoring two specific points along the passage of gallons on the
+filling line to ensure redundancy and reliability. The monitored location corresponds to the interval
+between the juice-filling stage and the gallon sealing stage.
+
+Two tubular photoelectric laser beam sensors are used to detect the passage of gallons, generating pulse
+signals that allow the counting of produced units. A programmable logic controller (PLC) identifies the
+product type (3 L or 5 L gallons) and detects discarded units. This information is transmitted to a
+custom datalogger via the Modbus ASCII/RTU protocol.
+
+The datalogger is installed in the machine’s main electrical panel and is responsible for filtering and
+aggregating production signals. Data packets containing timestamped production information are sent in
+JSON format to a cloud-based infrastructure every 20 seconds using MQTT with token-based authentication.
+
+A cloud processing pipeline performs data classification, aggregation, and storage. The raw data are
+subsequently preprocessed and aggregated into hourly and daily operational summaries, which form the
+basis of the dataset provided here.
+
+Dataset structure
+-----------------
+The dataset is provided as a spreadsheet file (.xlsx) containing four worksheets:
+
+1. processed_hourly
+2. daily_operation_summary
+3. hourly_operation_breakdown
+4. downtime_event_log
+
+Each worksheet is described below.
+
+--------------------------------------------------------------------
+Worksheet: processed_hourly
+--------------------------------------------------------------------
+Description:
+Hourly aggregated production data, including production volume and basic temporal information.
+
+Columns:
+- date:
+  Calendar date of the production record (YYYY-MM-DD).
+
+- hour_start:
+  Start time of the hourly interval (HH:MM).
+
+- hour_end:
+  End time of the hourly interval (HH:MM).
+
+- production_gallons:
+  Total number of gallons produced during the hourly interval.
+
+--------------------------------------------------------------------
+Worksheet: daily_operation_summary
+--------------------------------------------------------------------
+Description:
+Daily aggregated operational and production summary, including efficiency and time allocation.
+
+Columns:
+- date:
+  Calendar date of the production record (YYYY-MM-DD).
+
+- product_type_l:
+  Product size in liters (e.g., 3 or 5 liters).
+
+- production_units:
+  Number of units produced during the day.
+
+- liters_produced:
+  Total volume produced during the day (liters).
+
+- production_start_time:
+  Time at which production started on the given date (HH:MM:SS).
+
+- production_end_time:
+  Time at which production ended on the given date (HH:MM:SS).
+
+- efficiency:
+  Operational efficiency expressed as a percentage (%).
+
+- gallons_per_hour:
+  Average production rate (gallons per hour).
+
+- monitored_time_dec:
+  Total monitored time during the day (hours, decimal format).
+
+- operation_time_dec:
+  Effective operation time during the day (hours, decimal format).
+
+- pause_time_dec:
+  Total downtime or pause time during the day (hours, decimal format).
+
+--------------------------------------------------------------------
+Worksheet: hourly_operation_breakdown
+--------------------------------------------------------------------
+Description:
+Hourly breakdown of monitored time, effective operation time, and downtime, including efficiency.
+
+Columns:
+- date:
+  Calendar date of the record (YYYY-MM-DD).
+
+- hour_start:
+  Start time of the hourly interval (HH:MM).
+
+- hour_end:
+  End time of the hourly interval (HH:MM).
+
+- monitored_time_h:
+  Total monitored time during the hour (hours).
+
+- operation_time_h:
+  Effective operation time during the hour (hours).
+
+- downtime_h:
+  Total downtime during the hour (hours).
+
+- efficiency:
+  Operational efficiency for the hourly interval (%).
+
+--------------------------------------------------------------------
+Worksheet: downtime_event_log
+--------------------------------------------------------------------
+Description:
+Event-based log of individual downtime occurrences.
+
+Columns:
+- downtime_id:
+  Unique identifier for the downtime event.
+
+- date:
+  Calendar date of the downtime event (YYYY-MM-DD).
+
+- downtime_start_time:
+  Start time of the downtime event (HH:MM:SS).
+
+- downtime_end_time:
+  End time of the downtime event (HH:MM:SS).
+
+- downtime_time:
+  Total duration of the downtime event (hours, decimal format).
+
+Units and conventions
+---------------------
+- Time values are expressed in hours (decimal format) or clock time (HH:MM or HH:MM:SS).
+- Efficiency values are expressed as percentages (%).
+- Decimal separator follows the international standard (dot).
+
+Data quality and limitations
+----------------------------
+- The data represent real industrial operation and may include periods of zero production or extended
+  downtime.
+- No artificial filtering or smoothing was applied.
+- Missing or zero values reflect actual operational conditions.
+
+No sensitive, confidential, or personally identifiable information is included in this dataset.
