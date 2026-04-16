@@ -1,18 +1,19 @@
 # Boiler Exploration Findings
 
 ## KDD Focus
-- Selected because the timestamp cadence is regular and the process diagram gives direct physical context.
-- Preprocessing repaired the original dataset with `data_AutoReg.csv` to remove the 30 missing values in `YJJWSLL.AV_0#`.
-- Transformation grouped variables into pressure, temperature, flow, oxygen, fan-condition, differential-pressure, and valve-control families.
+- The project is now boiler-only, moving from dataset screening to a domain-driven KDD process.
+- The repaired working dataset is built from `data.csv` plus the 30 values filled by `data_AutoReg.csv`.
+- Variable families are interpreted through the boiler diagram before feature reduction decisions are made.
 
 ## Findings
-- The repaired dataset was saved to `boiler_repaired.csv` for downstream use.
+- The repaired dataset was saved to `boiler_repaired.csv` for downstream modeling.
 - Timestamp spacing is constant across the full series: the only observed gap is 5 seconds.
-- The variable families align well with the boiler diagram, so this dataset supports both statistical and physical interpretation.
-- Family-specific heatmaps were generated to support representative-variable selection inside each physical group.
+- The heatmaps support clear pressure domains, left/right paired sensors, and control-loop structure.
+- Raw correlation is not enough for maintenance-oriented interpretation because control action, lag, and operating regime can hide simple physical links.
+- Family-level heatmaps are the right tool for representative-variable selection before LSTM experiments on the original and aggregated datasets.
 
-## Forecasting Ideas
-- Forecast `TE_8332A.AV_0#` for boiler outlet steam temperature control.
-- Forecast `ZZQBCHLL.AV_0#` for compensated main steam flow demand.
-- Forecast `YJJWSLL.AV_0#` to study desuperheating water behavior after repairing the gaps.
-- Build models at a family level first to identify whether pressure, temperature, or flow variables contribute the strongest predictive signal.
+## Dimensionality Reduction Guidance
+- Upper furnace pressures A-F form one redundant block; keep one representative for forecasting inputs.
+- Steam-side pressures `PTCA_8322A` and `PTCA_8324` form a second redundant pair; keep one representative there as well.
+- The oxygen pair is nearly identical, so one variable is enough for the forecasting feature set.
+- Left/right paired sensors should not be discarded blindly: one representative supports forecasting, while left/right mismatch can be retained separately for physical diagnostics.
