@@ -1,0 +1,92 @@
+[
+  {
+    "family": "Target",
+    "original_variables": "TE_8313B.AV_0#",
+    "observed_structure": "Primary forecasting target selected from the furnace thermal state.",
+    "representative_variables": "TE_8313B.AV_0#",
+    "reason_for_keeping": "Temperature in the upper furnace chamber is thermally meaningful and connected to flow, fan, pressure, and load behavior.",
+    "reason_for_dropping_others": "Not applicable; this variable is the prediction target and is included in all modeling subsets.",
+    "candidate_membership": "A, B, C as target"
+  },
+  {
+    "family": "Upper furnace pressure",
+    "original_variables": "PT_8313A.AV_0#; PT_8313B.AV_0#; PT_8313C.AV_0#; PT_8313D.AV_0#; PT_8313E.AV_0#; PT_8313F.AV_0#",
+    "observed_structure": "Strong redundant pressure-domain block.",
+    "representative_variables": "PT_8313C.AV_0#",
+    "reason_for_keeping": "Preserves upper-furnace pressure information while avoiding six highly similar channels.",
+    "reason_for_dropping_others": "Other PT_8313 sensors observe the same pressure field and add redundancy for forecasting.",
+    "candidate_membership": "A, B, C"
+  },
+  {
+    "family": "Steam/container pressure",
+    "original_variables": "PTCA_8322A.AV_0#; PTCA_8324.AV_0#",
+    "observed_structure": "Coherent paired pressure domain.",
+    "representative_variables": "PTCA_8322A.AV_0#",
+    "reason_for_keeping": "Keeps steam-side pressure context as a separate domain from furnace pressure.",
+    "reason_for_dropping_others": "PTCA_8324 is the paired counterpart and is redundant for the reduced forecasting set.",
+    "candidate_membership": "A, B, C"
+  },
+  {
+    "family": "Economizer temperature",
+    "original_variables": "TE_8319A.AV_0#; TE_8319B.AV_0#",
+    "observed_structure": "Left/right economizer outlet temperature pair.",
+    "representative_variables": "TE_8319A.AV_0#",
+    "reason_for_keeping": "Provides upstream flue-gas/economizer thermal context.",
+    "reason_for_dropping_others": "TE_8319B is retained conceptually for asymmetry checks but removed from the reduced forecasting input set.",
+    "candidate_membership": "A, B, C"
+  },
+  {
+    "family": "Air-preheater and outlet thermal state",
+    "original_variables": "TE_8303.AV_0#; TE_8304.AV_0#; TE_8332A.AV_0#",
+    "observed_structure": "Temperature family is not one fully redundant block; outlet steam temperature is more isolated.",
+    "representative_variables": "TE_8303.AV_0#; TE_8332A.AV_0#",
+    "reason_for_keeping": "TE_8303 preserves air-preheater thermal context; TE_8332A is added in Candidate B to retain downstream steam-temperature behavior.",
+    "reason_for_dropping_others": "TE_8304 is omitted from the reduced sets to avoid over-representing similar air-preheater behavior.",
+    "candidate_membership": "TE_8303 in A/B/C; TE_8332A in B/C"
+  },
+  {
+    "family": "Flow and load",
+    "original_variables": "FT_8301.AV_0#; FT_8302.AV_0#; FT_8306A.AV_0#; FT_8306B.AV_0#; ZZQBCHLL.AV_0#",
+    "observed_structure": "Flow variables contain more than one mechanism: fan flow, return-air flow, and compensated steam flow.",
+    "representative_variables": "ZZQBCHLL.AV_0#; FT_8301.AV_0#; FT_8306A.AV_0#",
+    "reason_for_keeping": "ZZQBCHLL represents steam-production load; FT_8301 and FT_8306A are added in Candidate B to preserve distinct flow mechanisms.",
+    "reason_for_dropping_others": "FT_8302 and FT_8306B are omitted to keep the set compact and avoid paired-flow redundancy.",
+    "candidate_membership": "ZZQBCHLL in A/B/C; FT_8301 and FT_8306A in B/C"
+  },
+  {
+    "family": "Oxygen",
+    "original_variables": "AIR_8301A.AV_0#; AIR_8301B.AV_0#",
+    "observed_structure": "Strong left/right oxygen pair.",
+    "representative_variables": "AIR_8301A.AV_0#",
+    "reason_for_keeping": "Keeps excess-air/combustion information with one representative channel.",
+    "reason_for_dropping_others": "AIR_8301B is redundant for forecasting inputs but remains meaningful for asymmetry diagnosis.",
+    "candidate_membership": "A, B, C"
+  },
+  {
+    "family": "Fan condition",
+    "original_variables": "YFJ3_AI.AV_0#; YFJ3_ZD1.AV_0#; YFJ3_ZD2.AV_0#",
+    "observed_structure": "Fan current and vibration do not collapse into one fully redundant group.",
+    "representative_variables": "YFJ3_AI.AV_0#; YFJ3_ZD2.AV_0#",
+    "reason_for_keeping": "YFJ3_AI captures fan duty/current; YFJ3_ZD2 is added in Candidate B to preserve mechanical-condition context.",
+    "reason_for_dropping_others": "YFJ3_ZD1 is omitted to avoid carrying both vibration channels in the reduced set.",
+    "candidate_membership": "YFJ3_AI in A/B/C; YFJ3_ZD2 in B/C"
+  },
+  {
+    "family": "Differential pressure",
+    "original_variables": "SXLTCYZ.AV_0#; SXLTCYY.AV_0#; ZCLCCY.AV_0#; YCLCCY.AV_0#",
+    "observed_structure": "Layer differential pressures include paired structure and possible gas-path resistance information.",
+    "representative_variables": "SXLTCYZ.AV_0#; ZCLCCY.AV_0#",
+    "reason_for_keeping": "SXLTCYZ gives upper/lower hearth differential-pressure context; ZCLCCY is added in Candidate B to preserve a second gas-path resistance view.",
+    "reason_for_dropping_others": "SXLTCYY and YCLCCY are omitted as paired counterparts in the reduced forecasting set.",
+    "candidate_membership": "SXLTCYZ in A/B/C; ZCLCCY in B/C"
+  },
+  {
+    "family": "Desuperheating control loop",
+    "original_variables": "TV_8329ZC.AV_0#; YJJWSLL.AV_0#",
+    "observed_structure": "Control-loop pair rather than purely passive process measurements.",
+    "representative_variables": "TV_8329ZC.AV_0#; YJJWSLL.AV_0#",
+    "reason_for_keeping": "Candidate C tests whether control-signal information improves forecasting.",
+    "reason_for_dropping_others": "Excluded from Candidates A and B to keep the base physical set independent from explicit controller action.",
+    "candidate_membership": "C only"
+  }
+]

@@ -1,0 +1,87 @@
+{
+  "target_column": "TE_8313B.AV_0#",
+  "candidate_a_features": [
+    "PT_8313C.AV_0#",
+    "PTCA_8322A.AV_0#",
+    "TE_8319A.AV_0#",
+    "TE_8303.AV_0#",
+    "ZZQBCHLL.AV_0#",
+    "AIR_8301A.AV_0#",
+    "YFJ3_AI.AV_0#",
+    "SXLTCYZ.AV_0#"
+  ],
+  "candidate_b_additions": [
+    "TE_8332A.AV_0#",
+    "FT_8301.AV_0#",
+    "FT_8306A.AV_0#",
+    "YFJ3_ZD2.AV_0#",
+    "ZCLCCY.AV_0#"
+  ],
+  "candidate_c_additions": [
+    "TV_8329ZC.AV_0#",
+    "YJJWSLL.AV_0#"
+  ],
+  "granularity_options": {
+    "raw": null,
+    "30s": "30s",
+    "1min": "1min",
+    "5min": "5min"
+  },
+  "candidate_b_plot_groups": {
+    "target": [
+      "TE_8313B.AV_0#"
+    ],
+    "pressure_state": [
+      "PT_8313C.AV_0#",
+      "PTCA_8322A.AV_0#"
+    ],
+    "thermal_context": [
+      "TE_8319A.AV_0#",
+      "TE_8303.AV_0#",
+      "TE_8332A.AV_0#"
+    ],
+    "steam_load_flow": [
+      "ZZQBCHLL.AV_0#"
+    ],
+    "primary_fan_flow": [
+      "FT_8301.AV_0#"
+    ],
+    "return_air_flow_left": [
+      "FT_8306A.AV_0#"
+    ],
+    "oxygen_state": [
+      "AIR_8301A.AV_0#"
+    ],
+    "fan_condition": [
+      "YFJ3_AI.AV_0#",
+      "YFJ3_ZD2.AV_0#"
+    ],
+    "differential_pressure": [
+      "SXLTCYZ.AV_0#",
+      "ZCLCCY.AV_0#"
+    ]
+  },
+  "assumed_plot_units": {
+    "target": "Temp (assumed C)",
+    "pressure_state": "Pressure (assumed native)",
+    "thermal_context": "Temp (assumed C)",
+    "steam_load_flow": "Steam flow (assumed t/h)",
+    "primary_fan_flow": "Air flow (assumed m3/h)",
+    "return_air_flow_left": "Air flow (assumed m3/h)",
+    "oxygen_state": "O2 (assumed %)",
+    "fan_condition": "Fan condition (native)",
+    "differential_pressure": "Delta P (assumed Pa/kPa)"
+  },
+  "feature_selection_note": {
+    "objective": "The forecasting target is TE_8313B.AV_0#, the temperature in the upper part of the furnace chamber. The feature-selection process reduces dimensionality while preserving the main physical domains of the boiler.",
+    "selection_principles": [
+      "Redundant sensors are compressed when they observe the same physical domain.",
+      "At least one representative is preserved for each relevant boiler segment.",
+      "Left/right pairs are reduced for forecasting, but asymmetry remains important for maintenance interpretation.",
+      "Control-loop variables are separated from the base physical set because they may improve forecasting while changing model interpretation."
+    ],
+    "candidate_a_rationale": "Candidate A is the physical-only reduced dataset. It preserves the core boiler structure with minimal redundancy.",
+    "candidate_b_rationale": "Candidate B is the main working dataset. It keeps all Candidate A variables and adds variables that preserve distinct heatmap-supported behavior not captured by the minimum physical set.",
+    "candidate_c_rationale": "Candidate C is the control-aware comparison dataset. It keeps all Candidate B variables and adds explicit desuperheating control-loop variables."
+  }
+}

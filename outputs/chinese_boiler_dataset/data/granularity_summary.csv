@@ -1,0 +1,9 @@
+id_key,candidate,granularity,rows,columns,start_date,end_date
+subset_B_raw,subset_B,raw,86400,15,2022-03-27 14:28:54,2022-04-01 14:28:49
+subset_B_30s,subset_B,30s,14401,15,2022-03-27 14:28:30,2022-04-01 14:28:30
+subset_B_1min,subset_B,1min,7201,15,2022-03-27 14:28:00,2022-04-01 14:28:00
+subset_B_5min,subset_B,5min,1441,15,2022-03-27 14:25:00,2022-04-01 14:25:00
+subset_C_raw,subset_C,raw,86400,17,2022-03-27 14:28:54,2022-04-01 14:28:49
+subset_C_30s,subset_C,30s,14401,17,2022-03-27 14:28:30,2022-04-01 14:28:30
+subset_C_1min,subset_C,1min,7201,17,2022-03-27 14:28:00,2022-04-01 14:28:00
+subset_C_5min,subset_C,5min,1441,17,2022-03-27 14:25:00,2022-04-01 14:25:00
