@@ -2,3 +2,8 @@
 .tmp/
 __pycache__/
 .ipynb_checkpoints/
+
+# Ignore all local datasets except the Chinese boiler dataset used by this repo.
+data/*
+!data/chinese_boiler_dataset/
+!data/chinese_boiler_dataset/**
