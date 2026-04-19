@@ -1,0 +1,140 @@
+{
+  "smoothing_windows": {
+    "1min": 60,
+    "5min": 300
+  },
+  "heatmap_families": {
+    "pressure_state": [
+      "PT_8313A.AV_0#",
+      "PT_8313B.AV_0#",
+      "PT_8313C.AV_0#",
+      "PT_8313D.AV_0#",
+      "PT_8313E.AV_0#",
+      "PT_8313F.AV_0#",
+      "PTCA_8322A.AV_0#",
+      "PTCA_8324.AV_0#"
+    ],
+    "temperature_state": [
+      "TE_8319A.AV_0#",
+      "TE_8319B.AV_0#",
+      "TE_8313B.AV_0#",
+      "TE_8303.AV_0#",
+      "TE_8304.AV_0#",
+      "TE_8332A.AV_0#"
+    ],
+    "flow_state": [
+      "FT_8301.AV_0#",
+      "FT_8302.AV_0#",
+      "FT_8306A.AV_0#",
+      "FT_8306B.AV_0#",
+      "YJJWSLL.AV_0#",
+      "ZZQBCHLL.AV_0#"
+    ],
+    "oxygen_state": ["AIR_8301A.AV_0#", "AIR_8301B.AV_0#"],
+    "fan_condition": ["YFJ3_AI.AV_0#", "YFJ3_ZD1.AV_0#", "YFJ3_ZD2.AV_0#"],
+    "differential_pressure": ["SXLTCYZ.AV_0#", "SXLTCYY.AV_0#", "ZCLCCY.AV_0#", "YCLCCY.AV_0#"]
+  },
+  "plot_specs": [
+    {
+      "kind": "time_series_groups",
+      "frame": "subset_B_raw",
+      "groups_ref": "candidate_b_plot_groups",
+      "units_ref": "assumed_plot_units",
+      "file_prefix": "subset_B_raw",
+      "output_dir_ref": "reduced_plots"
+    },
+    {
+      "kind": "stacked_time_series",
+      "frame": "subset_C",
+      "output_path_ref": ["reduced_plots", "subset_C_raw_control_loop.png"],
+      "panels": [
+        {
+          "column": "TV_8329ZC.AV_0#",
+          "title": "subset_C_raw - Valve Control Signal",
+          "ylabel": "Valve (%)",
+          "color": "#3366aa"
+        },
+        {
+          "column": "YJJWSLL.AV_0#",
+          "title": "subset_C_raw - Desuperheating Water Flow",
+          "ylabel": "Flow",
+          "color": "#aa6633"
+        }
+      ]
+    },
+    {
+      "kind": "target_granularity_comparison",
+      "dataset_keys_ref": "subset_b_datasets",
+      "target_column_ref": true,
+      "title": "Candidate B Target By Granularity",
+      "ylabel": "Temp (assumed C)",
+      "output_path_ref": ["reduced_plots", "subset_B_target_granularity_comparison.png"]
+    },
+    {
+      "kind": "heatmap",
+      "frame": "repaired",
+      "sample_step": 20,
+      "drop_columns": ["date"],
+      "title": "Boiler Correlation Heatmap",
+      "output_path_ref": ["plots", "correlation_heatmap.png"]
+    },
+    {
+      "kind": "hist_grid_by_dataset",
+      "dataset_keys_ref": "subset_b_datasets",
+      "target_column_ref": true,
+      "title": "subset_B Target Distribution By Granularity",
+      "xlabel": "Temp (assumed C)",
+      "output_path_ref": ["distribution_plots", "subset_B_target_distribution_by_granularity.png"]
+    },
+    {
+      "kind": "standardized_boxplots",
+      "dataset_keys_ref": "subset_b_datasets",
+      "output_dir_ref": "distribution_plots"
+    },
+    {
+      "kind": "barh",
+      "frame": "outlier_variable_counts",
+      "x": "total",
+      "y": "variable",
+      "sort_by": "total",
+      "title": "subset_B_raw - IQR Outlier Count By Variable",
+      "xlabel": "Outlier event count",
+      "ylabel": "Variable",
+      "output_path_ref": ["outlier_plots", "outlier_variable_counts.png"]
+    },
+    {
+      "kind": "window_bar",
+      "frame": "outlier_top_windows",
+      "x": "event_count",
+      "title": "Top 20 Five-Minute Outlier Windows",
+      "xlabel": "Outlier event count",
+      "ylabel": "Window start",
+      "output_path_ref": ["outlier_plots", "outlier_top_windows.png"]
+    },
+    {
+      "kind": "simultaneous_counts",
+      "frame": "outlier_simultaneous",
+      "title": "subset_B_raw - Strongest Simultaneous Outlier Events",
+      "output_path_ref": ["outlier_plots", "outlier_simultaneous_counts.png"]
+    },
+    {
+      "kind": "outlier_timeline",
+      "frame": "outlier_events",
+      "window": "5min",
+      "title": "subset_B_raw - IQR Outlier Events Per 5-Minute Window",
+      "output_path_ref": ["outlier_plots", "outlier_timeline_5min.png"]
+    },
+    {
+      "kind": "target_transform_plots",
+      "transform_series_ref": true,
+      "target_ylabel": "Temp (assumed C)",
+      "output_dir_ref": "preprocessing_plots"
+    },
+    {
+      "kind": "smoothing_std_summary",
+      "frame": "smoothing_summary",
+      "title": "Target Standard Deviation After Smoothing And Differencing",
+      "output_path_ref": ["preprocessing_plots", "smoothing_differencing_std_summary.png"]
+    }
+  ]
+}
