@@ -2,9 +2,9 @@
 
 ## Target Distribution
 - `raw`: mean `774.06`, std `10.68`, IQR outliers `1.44%`.
-- `30s`: mean `774.06`, std `10.67`, IQR outliers `1.44%`.
+- `30s`: mean `774.06`, std `10.67`, IQR outliers `1.42%`.
 - `1min`: mean `774.06`, std `10.65`, IQR outliers `1.43%`.
-- `5min`: mean `774.06`, std `10.45`, IQR outliers `1.39%`.
+- `5min`: mean `774.06`, std `10.44`, IQR outliers `1.46%`.
 
 ## Main Outlier Contributors In `subset_B_raw`
 - `AIR_8301A.AV_0#`: `3.44%` IQR outliers.

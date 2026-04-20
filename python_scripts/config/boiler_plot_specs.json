@@ -127,6 +127,7 @@
     {
       "kind": "target_transform_plots",
       "transform_series_ref": true,
+      "zoom_duration": "6h",
       "target_ylabel": "Temp (assumed C)",
       "output_dir_ref": "preprocessing_plots"
     },

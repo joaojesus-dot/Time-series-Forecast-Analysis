@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from extraction import DATASET_ANALYZERS
@@ -15,6 +17,12 @@ if __package__ in {None, ""}:
         summarize_outliers,
         summarize_target_transforms,
         summarize_variables,
+    )
+    from forecasting import (
+        prune_forecasting_outputs,
+        run_arimax_forecasts,
+        run_univariate_arima_forecasts,
+        write_arima_arimax_comparison,
     )
     from plots import write_plot_specs
     from preprocessing import (
@@ -33,6 +41,12 @@ else:
         summarize_target_transforms,
         summarize_variables,
     )
+    from .forecasting import (
+        prune_forecasting_outputs,
+        run_arimax_forecasts,
+        run_univariate_arima_forecasts,
+        write_arima_arimax_comparison,
+    )
     from .plots import write_plot_specs
     from .preprocessing import (
         build_feature_subset,
@@ -50,6 +64,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Write boiler-only KDD and physical-analysis outputs.")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
+    parser.add_argument("--skip-forecasting", action="store_true")
     args = parser.parse_args()
 
     dataset_name = "chinese_boiler_dataset"
@@ -60,6 +75,7 @@ def main() -> int:
     distribution_plots_output = plots_output / "distribution"
     outlier_plots_output = plots_output / "outliers"
     preprocessing_plots_output = plots_output / "preprocessing"
+    forecasting_output = dataset_output / "forecasting"
 
     # The orchestrator owns the KDD execution order. The lower-level modules only
     # transform data, calculate summaries, write plots, or write reports.
@@ -70,6 +86,7 @@ def main() -> int:
         distribution_plots_output,
         outlier_plots_output,
         preprocessing_plots_output,
+        forecasting_output,
     ]:
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -80,6 +97,7 @@ def main() -> int:
     candidate_a_features = feature_selection["candidate_a_features"]
     candidate_b_features = candidate_a_features + feature_selection["candidate_b_additions"]
     candidate_c_features = candidate_b_features + feature_selection["candidate_c_additions"]
+    resampling_policy = feature_selection["resampling_policy"]
 
     quality_report = DATASET_ANALYZERS[dataset_name](args.data_dir / dataset_name)
     quality_path = dataset_output / "data_quality.md"
@@ -90,13 +108,13 @@ def main() -> int:
     # this same source so that every artifact is traceable to one cleaned frame.
     repaired = load_repaired_boiler_frame(args.data_dir / dataset_name)
     repaired_path = data_output / "boiler_repaired.csv"
-    repaired.to_csv(repaired_path, index=False)
+    write_csv_output(repaired, repaired_path)
 
     # Candidate B is the main forecasting feature set. Candidate C adds control
     # signals and is kept as a control-aware comparison for later modeling.
     subset_b_base = build_feature_subset(repaired, target_column, candidate_b_features)
     subset_c_base = build_feature_subset(repaired, target_column, candidate_c_features)
-    subset_c_base.to_csv(data_output / "subset_C.csv", index=False)
+    write_csv_output(subset_c_base, data_output / "subset_C.csv")
 
     # Generate all Candidate B granularities from the same base frame. This keeps
     # raw, 30s, 1min, and 5min datasets aligned in schema and naming.
@@ -104,32 +122,34 @@ def main() -> int:
         subset_b_base,
         feature_selection["granularity_options"],
         dataset_name="subset_B",
+        timestamp_column=str(resampling_policy["timestamp_column"]),
+        resampling_policy=resampling_policy,
     )
     for id_key, dataset in subset_b_datasets.items():
-        dataset.to_csv(data_output / f"{id_key}.csv", index=False)
-    subset_b_datasets["subset_B_raw"].to_csv(data_output / "subset_B.csv", index=False)
+        write_csv_output(dataset, data_output / f"{id_key}.csv")
+    write_csv_output(subset_b_datasets["subset_B_raw"], data_output / "subset_B.csv")
 
     granularity_summary = build_granularity_summary(subset_b_datasets, dataset_name="subset_B")
-    granularity_summary.to_csv(data_output / "granularity_summary.csv", index=False)
+    write_csv_output(granularity_summary, data_output / "granularity_summary.csv")
 
     # Distribution and outlier analysis share the same IQR bounds. This avoids
     # recalculating thresholds and keeps the outlier reports consistent with the
     # distribution tables.
     distribution_summary = summarize_variables(subset_b_datasets)
-    distribution_summary.to_csv(data_output / "distribution_summary.csv", index=False)
+    write_csv_output(distribution_summary, data_output / "distribution_summary.csv")
 
     outlier_events = locate_iqr_outliers(subset_b_datasets["subset_B_raw"], distribution_summary, "subset_B_raw")
     outlier_summary = summarize_outliers(outlier_events)
-    outlier_summary["variable_counts"].to_csv(data_output / "outlier_variable_counts.csv", index=False)
-    outlier_summary["top_windows"].to_csv(data_output / "outlier_top_windows.csv", index=False)
-    outlier_summary["simultaneous"].to_csv(data_output / "outlier_top_simultaneous_events.csv", index=False)
+    write_csv_output(outlier_summary["variable_counts"], data_output / "outlier_variable_counts.csv")
+    write_csv_output(outlier_summary["top_windows"], data_output / "outlier_top_windows.csv")
+    write_csv_output(outlier_summary["simultaneous"], data_output / "outlier_top_simultaneous_events.csv")
 
     # Smoothing and differencing are diagnostic transforms for ARIMA/LSTM
     # preparation. They do not replace the level target unless modeling later
     # proves they improve forecasting.
     transform_series = build_target_transform_series(subset_b_datasets, target_column, plot_config["smoothing_windows"])
     smoothing_summary = summarize_target_transforms(transform_series, target_column)
-    smoothing_summary.to_csv(data_output / "smoothing_differencing_summary.csv", index=False)
+    write_csv_output(smoothing_summary, data_output / "smoothing_differencing_summary.csv")
 
     frames = {
         "repaired": repaired,
@@ -168,12 +188,40 @@ def main() -> int:
         target_column=target_column,
         feature_selection=feature_selection,
         family_reduction_rows=family_reduction_rows,
+        resampling_policy=resampling_policy,
         granularity_summary=granularity_summary,
         distribution_summary=distribution_summary,
         outlier_summary=outlier_summary,
         smoothing_summary=smoothing_summary,
     )
+    if not args.skip_forecasting:
+        prune_forecasting_outputs(forecasting_output, feature_selection["forecasting_policy"])
+        arima_results = run_univariate_arima_forecasts(
+            datasets=subset_b_datasets,
+            target_column=target_column,
+            granularity_options=feature_selection["granularity_options"],
+            resampling_policy=resampling_policy,
+            forecasting_policy=feature_selection["forecasting_policy"],
+            output_dir=forecasting_output,
+            timestamp_column=str(resampling_policy["timestamp_column"]),
+        )
+        arimax_results = run_arimax_forecasts(
+            datasets=subset_b_datasets,
+            target_column=target_column,
+            granularity_options=feature_selection["granularity_options"],
+            resampling_policy=resampling_policy,
+            forecasting_policy=feature_selection["forecasting_policy"],
+            output_dir=forecasting_output,
+            timestamp_column=str(resampling_policy["timestamp_column"]),
+        )
+        write_arima_arimax_comparison(arima_results["metrics"], arimax_results["metrics"], forecasting_output)
     return 0
+
+
+def write_csv_output(frame: pd.DataFrame, output_path: Path) -> None:
+    temp_path = output_path.with_name(f".{output_path.name}.tmp")
+    frame.to_csv(temp_path, index=False)
+    temp_path.replace(output_path)
 
 
 def build_boiler_plot_specs(

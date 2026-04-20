@@ -20,6 +20,7 @@ def write_documentation_outputs(
     target_column: str,
     feature_selection: dict[str, object],
     family_reduction_rows: list[dict[str, object]],
+    resampling_policy: dict[str, object],
     granularity_summary: pd.DataFrame,
     distribution_summary: pd.DataFrame,
     outlier_summary: dict[str, pd.DataFrame],
@@ -37,7 +38,7 @@ def write_documentation_outputs(
 
     output_files = {
         "exploration_findings.md": build_exploration_markdown(repaired_filename, target_column),
-        "granularity_analysis.md": build_granularity_markdown(granularity_summary),
+        "granularity_analysis.md": build_granularity_markdown(granularity_summary, resampling_policy),
         "distribution_analysis.md": build_distribution_markdown(distribution_summary, target_column),
         "outlier_analysis.md": build_outlier_markdown(outlier_summary),
         "smoothing_differencing_analysis.md": build_smoothing_differencing_markdown(smoothing_summary),
@@ -77,10 +78,15 @@ def build_exploration_markdown(repaired_filename: str, target_column: str) -> st
     )
 
 
-def build_granularity_markdown(granularity_summary: pd.DataFrame) -> str:
+def build_granularity_markdown(granularity_summary: pd.DataFrame, resampling_policy: dict[str, object]) -> str:
     rows = [
         f"- `{row['id_key']}`: {row['rows']:,} rows from `{row['start_date']}` to `{row['end_date']}`."
         for row in granularity_summary.to_dict("records")
+    ]
+    column_aggregations = resampling_policy.get("column_aggregations", {})
+    column_aggregation_lines = [
+        f"- `{column}`: `{aggregation}`."
+        for column, aggregation in sorted(column_aggregations.items())
     ]
     return "\n".join(
         [
@@ -89,8 +95,15 @@ def build_granularity_markdown(granularity_summary: pd.DataFrame) -> str:
             "## Decision",
             "- Candidate B is generated at `raw`, `30s`, `1min`, and `5min` granularities.",
             "- The raw cadence is 5 seconds and is already known to be regular.",
-            "- Aggregation uses arithmetic mean because the selected variables are continuous process measurements.",
+            "- Resampled timestamps are right-labeled causal window endpoints.",
+            f"- Windows are `{resampling_policy['closed']}`-closed and labeled on the `{resampling_policy['label']}` edge.",
+            f"- Window origin is `{resampling_policy['origin']}` and incomplete edge windows are dropped: `{resampling_policy['drop_partial_windows']}`.",
+            f"- Default aggregation is `{resampling_policy['default_aggregation']}`.",
             "- Missing-window analysis is not repeated here; data quality already confirmed a constant 5-second cadence.",
+            "",
+            "## Configured Column Aggregation Overrides",
+            "- Overrides are applied only when the column is present in a resampled dataset.",
+            *(column_aggregation_lines or ["- None."]),
             "",
             "## Generated Datasets",
             *rows,

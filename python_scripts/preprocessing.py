@@ -6,6 +6,17 @@ from typing import Any
 import pandas as pd
 
 
+SUPPORTED_AGGREGATIONS = {
+    "mean": "mean",
+    "median": "median",
+    "last": "last",
+    "first": "first",
+    "min": "min",
+    "max": "max",
+    "std": "std",
+}
+
+
 # ---------------------------------------------------------------------------
 # Boiler data preparation
 # ---------------------------------------------------------------------------
@@ -39,6 +50,7 @@ def change_granularity(
     dataset: pd.DataFrame,
     output_granularity: str | None,
     timestamp_column: str = "date",
+    resampling_policy: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     granular = dataset.copy()
     granular[timestamp_column] = pd.to_datetime(granular[timestamp_column], errors="coerce")
@@ -47,12 +59,24 @@ def change_granularity(
     if output_granularity is None:
         return granular.reset_index(drop=True)
 
-    return (
-        granular.set_index(timestamp_column)
-        .resample(output_granularity)
-        .mean(numeric_only=True)
-        .reset_index()
+    policy = normalize_resampling_policy(resampling_policy, timestamp_column)
+    value_columns = [column for column in granular.columns if column != timestamp_column]
+    aggregation_map = build_aggregation_map(value_columns, policy)
+    indexed = granular.set_index(timestamp_column)
+    resampler = indexed.resample(
+        output_granularity,
+        label=policy["label"],
+        closed=policy["closed"],
+        origin=policy["origin"],
     )
+    resampled = resampler.agg(aggregation_map)
+
+    if policy["drop_partial_windows"]:
+        expected_count = expected_rows_per_window(output_granularity, policy["input_frequency"])
+        window_counts = resampler.size()
+        resampled = resampled.loc[window_counts[window_counts == expected_count].index]
+
+    return resampled.dropna(how="all").reset_index()
 
 
 def build_granularity_versions(
@@ -60,11 +84,73 @@ def build_granularity_versions(
     granularity_options: dict[str, str | None],
     dataset_name: str,
     timestamp_column: str = "date",
+    resampling_policy: dict[str, Any] | None = None,
 ) -> dict[str, pd.DataFrame]:
     return {
-        f"{dataset_name}_{granularity_key}": change_granularity(dataset, output_granularity, timestamp_column)
+        f"{dataset_name}_{granularity_key}": change_granularity(
+            dataset,
+            output_granularity,
+            timestamp_column,
+            resampling_policy,
+        )
         for granularity_key, output_granularity in granularity_options.items()
     }
+
+
+def normalize_resampling_policy(
+    resampling_policy: dict[str, Any] | None,
+    timestamp_column: str,
+) -> dict[str, Any]:
+    policy = {
+        "timestamp_column": timestamp_column,
+        "input_frequency": "5s",
+        "label": "right",
+        "closed": "left",
+        "origin": "start",
+        "drop_partial_windows": True,
+        "default_aggregation": "mean",
+        "column_aggregations": {},
+    }
+    if resampling_policy:
+        policy.update(resampling_policy)
+
+    validate_aggregation_name(str(policy["default_aggregation"]))
+    for aggregation_name in policy["column_aggregations"].values():
+        validate_aggregation_name(str(aggregation_name))
+
+    return policy
+
+
+def build_aggregation_map(value_columns: list[str], policy: dict[str, Any]) -> dict[str, str]:
+    default_aggregation = SUPPORTED_AGGREGATIONS[str(policy["default_aggregation"])]
+    column_aggregations = {
+        column: SUPPORTED_AGGREGATIONS[str(aggregation_name)]
+        for column, aggregation_name in policy["column_aggregations"].items()
+        if column in value_columns
+    }
+    return {column: column_aggregations.get(column, default_aggregation) for column in value_columns}
+
+
+def validate_aggregation_name(aggregation_name: str) -> None:
+    if aggregation_name not in SUPPORTED_AGGREGATIONS:
+        allowed = ", ".join(sorted(SUPPORTED_AGGREGATIONS))
+        raise ValueError(f"Unsupported aggregation '{aggregation_name}'. Allowed values: {allowed}.")
+
+
+def expected_rows_per_window(output_granularity: str, input_frequency: str) -> int:
+    output_delta = pd.Timedelta(output_granularity)
+    input_delta = pd.Timedelta(input_frequency)
+    if input_delta <= pd.Timedelta(0):
+        raise ValueError("input_frequency must be positive.")
+    if output_delta < input_delta:
+        raise ValueError("output_granularity must be greater than or equal to input_frequency.")
+    ratio = output_delta / input_delta
+    if ratio != int(ratio):
+        raise ValueError(
+            f"output_granularity '{output_granularity}' must be an integer multiple of input_frequency "
+            f"'{input_frequency}'."
+        )
+    return int(ratio)
 
 
 # ---------------------------------------------------------------------------

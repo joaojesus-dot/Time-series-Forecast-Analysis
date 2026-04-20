@@ -27,6 +27,51 @@
     "1min": "1min",
     "5min": "5min"
   },
+  "resampling_policy": {
+    "timestamp_column": "date",
+    "input_frequency": "5s",
+    "label": "right",
+    "closed": "left",
+    "origin": "start",
+    "drop_partial_windows": true,
+    "default_aggregation": "mean",
+    "column_aggregations": {
+      "TV_8329ZC.AV_0#": "last",
+      "YJJWSLL.AV_0#": "mean"
+    }
+  },
+  "forecasting_policy": {
+    "train_fraction": 0.8,
+    "target_granularities": [
+      "raw",
+      "30s",
+      "1min",
+      "5min"
+    ],
+    "write_full_forecasts": false,
+    "write_forecast_plots": true,
+    "arima_d_values": [
+      0,
+      1,
+      2
+    ],
+    "arima": {
+      "p": 1,
+      "q": 1,
+      "season_length": 1,
+      "seasonal_order": [
+        0,
+        0,
+        0
+      ],
+      "method": "CSS-ML"
+    },
+    "arimax": {
+      "feature_set": "candidate_b_non_target",
+      "standardize_exogenous": true,
+      "max_train_rows": 12000
+    }
+  },
   "candidate_b_plot_groups": {
     "target": [
       "TE_8313B.AV_0#"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -261,19 +262,34 @@ def _plot_target_transform_plots(spec: dict[str, Any], frames: dict[str, pd.Data
         smoothed = [record for record in records if record["transform"] == "trailing_rolling_mean"]
         first_difference = next(record for record in records if record["transform"] == "first_difference")
 
-        _plot_smoothing_comparison(id_key, original, smoothed, output_dir, str(spec.get("target_ylabel", "Target")))
+        _plot_smoothing_comparison(
+            id_key,
+            original,
+            smoothed,
+            output_dir,
+            str(spec.get("target_ylabel", "Target")),
+            str(spec.get("zoom_duration", "6h")),
+        )
         _plot_first_difference(id_key, first_difference, output_dir)
 
 
 def _plot_smoothing_std_summary(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
     frame = frames[str(spec["frame"])].copy()
     frame["transform_label"] = frame["transform"] + " (" + frame["window"] + ")"
-    fig, axis = plt.subplots(figsize=(12, 6))
-    sns.barplot(data=frame, x="granularity", y="std", hue="transform_label", ax=axis)
-    axis.set_title(spec["title"])
-    axis.set_xlabel("Granularity")
-    axis.set_ylabel("Std")
-    axis.legend(loc="upper right", fontsize=8)
+    level_frame = frame[frame["transform"] != "first_difference"]
+    differenced_frame = frame[frame["transform"] == "first_difference"]
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=False)
+    sns.barplot(data=level_frame, x="granularity", y="std", hue="transform_label", ax=axes[0])
+    axes[0].set_title("Level Target Std After Aggregation And Smoothing")
+    axes[0].set_xlabel("")
+    axes[0].set_ylabel("Level std")
+    axes[0].legend(loc="upper right", fontsize=8)
+
+    sns.barplot(data=differenced_frame, x="granularity", y="std", ax=axes[1], color="#b55d60")
+    axes[1].set_title("First-Difference Std By Granularity")
+    axes[1].set_xlabel("Granularity")
+    axes[1].set_ylabel("Delta std")
     _save_figure(fig, Path(spec["output_path"]))
 
 
@@ -283,30 +299,107 @@ def _plot_smoothing_comparison(
     smoothed: list[dict[str, Any]],
     output_dir: Path,
     ylabel: str,
+    zoom_duration: str,
 ) -> None:
-    fig, axis = plt.subplots(figsize=(14, 5))
-    axis.plot(original["dates"], original["values"], linewidth=0.9, alpha=0.55, label="original")
+    original_dates = pd.to_datetime(original["dates"]).reset_index(drop=True)
+    original_values = pd.Series(original["values"]).reset_index(drop=True)
+    smoothed_values = [
+        {
+            **item,
+            "dates": pd.to_datetime(item["dates"]).reset_index(drop=True),
+            "values": pd.Series(item["values"]).reset_index(drop=True),
+        }
+        for item in smoothed
+    ]
+    zoom_mask = _build_smoothing_zoom_mask(original_dates, original_values, smoothed_values, zoom_duration)
+
+    fig, axes = plt.subplots(2, 1, figsize=(14, 7), sharex=True)
+    axes[0].plot(original_dates[zoom_mask], original_values[zoom_mask], linewidth=0.9, alpha=0.65, label="original")
     for item in smoothed:
-        axis.plot(item["dates"], item["values"], linewidth=1.2, label=f"rolling mean {item['window']}")
-    axis.set_title(f"{id_key} - Target Smoothing Comparison")
-    axis.set_xlabel("date")
-    axis.set_ylabel(ylabel)
-    axis.legend(loc="upper right", fontsize=8)
+        item_values = pd.Series(item["values"]).reset_index(drop=True)
+        item_dates = pd.to_datetime(item["dates"]).reset_index(drop=True)
+        axes[0].plot(
+            item_dates[zoom_mask],
+            item_values[zoom_mask],
+            linewidth=1.2,
+            label=f"rolling mean {item['window']}",
+        )
+        axes[1].plot(
+            item_dates[zoom_mask],
+            (original_values - item_values)[zoom_mask],
+            linewidth=1.1,
+            label=f"original - {item['window']}",
+        )
+
+    axes[0].set_title(f"{id_key} - Target Smoothing Zoom")
+    axes[0].set_ylabel(ylabel)
+    axes[0].legend(loc="upper right", fontsize=8)
+    axes[1].axhline(0, color="#333333", linewidth=0.8)
+    axes[1].set_title("Smoothing Residual")
+    axes[1].set_xlabel("date")
+    axes[1].set_ylabel("Temp delta")
+    if smoothed:
+        axes[1].legend(loc="upper right", fontsize=8)
+    else:
+        axes[1].text(0.5, 0.5, "No smoothing window exceeds this cadence.", ha="center", va="center")
     _save_figure(fig, output_dir / f"{id_key}_target_smoothing_comparison.png")
 
 
 def _plot_first_difference(id_key: str, first_difference: dict[str, Any], output_dir: Path) -> None:
-    fig, axis = plt.subplots(figsize=(14, 4))
-    axis.plot(first_difference["dates"], first_difference["values"], linewidth=0.9, color="#4c72b0")
-    axis.axhline(0, color="#333333", linewidth=0.8)
-    axis.set_title(f"{id_key} - Target First Difference")
-    axis.set_xlabel("date")
-    axis.set_ylabel("Delta temp")
+    dates = pd.to_datetime(first_difference["dates"]).reset_index(drop=True)
+    values = pd.Series(first_difference["values"]).reset_index(drop=True)
+    clean_values = values.dropna()
+    rolling_steps = _steps_for_duration(dates, "1h")
+    rolling_abs = values.abs().rolling(window=rolling_steps, min_periods=max(1, rolling_steps // 4)).mean()
+
+    fig, axes = plt.subplots(2, 1, figsize=(14, 7))
+    axes[0].hist(clean_values, bins=80, color="#4c72b0", alpha=0.85)
+    axes[0].axvline(0, color="#333333", linewidth=0.8)
+    axes[0].set_title(f"{id_key} - Target First-Difference Distribution")
+    axes[0].set_xlabel("Delta temp")
+    axes[0].set_ylabel("Frequency")
+
+    axes[1].plot(dates, rolling_abs, linewidth=1.1, color="#4c72b0")
+    axes[1].set_title("Rolling 1h Mean Absolute First Difference")
+    axes[1].set_xlabel("date")
+    axes[1].set_ylabel("Mean abs delta")
     _save_figure(fig, output_dir / f"{id_key}_target_first_difference.png")
+
+
+def _build_smoothing_zoom_mask(
+    dates: pd.Series,
+    original_values: pd.Series,
+    smoothed_values: list[dict[str, Any]],
+    zoom_duration: str,
+) -> pd.Series:
+    duration = pd.Timedelta(zoom_duration)
+    reference = next((item for item in reversed(smoothed_values) if item["values"].notna().any()), None)
+    if reference is None or dates.empty:
+        return pd.Series([True] * len(dates))
+
+    residual = (original_values - reference["values"]).abs()
+    center_position = int(residual.idxmax()) if residual.notna().any() else len(dates) // 2
+    center_date = dates.iloc[center_position]
+    start_date = max(dates.min(), center_date - duration / 2)
+    end_date = start_date + duration
+    if end_date > dates.max():
+        end_date = dates.max()
+        start_date = max(dates.min(), end_date - duration)
+    return (dates >= start_date) & (dates <= end_date)
+
+
+def _steps_for_duration(dates: pd.Series, duration: str) -> int:
+    diffs = dates.diff().dropna().dt.total_seconds()
+    if diffs.empty:
+        return 1
+    seconds_per_step = max(float(diffs.median()), 1.0)
+    return max(1, round(pd.Timedelta(duration).total_seconds() / seconds_per_step))
 
 
 def _save_figure(fig: plt.Figure, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Tight layout not applied.*", category=UserWarning)
+        fig.tight_layout()
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
