@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 
@@ -35,8 +36,8 @@ def build_granularity_summary(
 # ---------------------------------------------------------------------------
 # Distribution statistics
 # ---------------------------------------------------------------------------
-# The IQR bounds are stored together with the descriptive statistics so outlier
-# detection can reuse exactly the same thresholds instead of recalculating them.
+# These summaries are descriptive only. Outlier treatment is intentionally not
+# part of the active pipeline until we choose a standard-deviation/z-score rule.
 
 def summarize_variables(
     datasets: dict[str, pd.DataFrame],
@@ -60,9 +61,6 @@ def summarize_series(
     q1 = clean_values.quantile(0.25)
     q3 = clean_values.quantile(0.75)
     iqr = q3 - q1
-    lower_bound = q1 - 1.5 * iqr
-    upper_bound = q3 + 1.5 * iqr
-    outlier_count = int(((clean_values < lower_bound) | (clean_values > upper_bound)).sum())
 
     return {
         "id_key": id_key,
@@ -77,112 +75,8 @@ def summarize_series(
         "q3": q3,
         "max": clean_values.max(),
         "iqr": iqr,
-        "lower_bound": lower_bound,
-        "upper_bound": upper_bound,
         "skewness": clean_values.skew(),
-        "iqr_outlier_count": outlier_count,
-        "iqr_outlier_percent": 100 * outlier_count / len(clean_values) if len(clean_values) else 0,
     }
-
-
-# ---------------------------------------------------------------------------
-# Outlier analysis
-# ---------------------------------------------------------------------------
-# Outliers are calculated per variable using each variable's own IQR bounds.
-# This avoids applying one raw threshold across sensors with different units and
-# magnitudes. Z-score scaling can make variables comparable for plots or model
-# inputs, but a global z-score threshold would still assume similar distribution
-# shapes and tail behavior across all sensors, which is not guaranteed here.
-
-
-def locate_iqr_outliers(
-    dataset: pd.DataFrame,
-    distribution_summary: pd.DataFrame,
-    id_key: str,
-    timestamp_column: str = "date",
-) -> pd.DataFrame:
-    event_frames = []
-    bounds = distribution_summary[distribution_summary["id_key"] == id_key].set_index("variable")
-
-    for column in [col for col in dataset.columns if col != timestamp_column]:
-        if column not in bounds.index:
-            continue
-
-        lower_bound = bounds.at[column, "lower_bound"]
-        upper_bound = bounds.at[column, "upper_bound"]
-        mask = (dataset[column] < lower_bound) | (dataset[column] > upper_bound)
-
-        if not mask.any():
-            continue
-
-        events = dataset.loc[mask, [timestamp_column, column]].copy()
-        events = events.rename(columns={timestamp_column: "date", column: "value"})
-        events["variable"] = column
-        events["direction"] = events["value"].apply(lambda value: "low" if value < lower_bound else "high")
-        event_frames.append(events)
-
-    if not event_frames:
-        return pd.DataFrame(columns=["date", "variable", "value", "direction"])
-
-    events = pd.concat(event_frames, ignore_index=True)
-    events["date"] = pd.to_datetime(events["date"])
-    return events.sort_values(["date", "variable"]).reset_index(drop=True)
-
-
-def summarize_outliers(
-    events: pd.DataFrame,
-    window: str = "5min",
-    top_windows: int = 20,
-    top_simultaneous: int = 50,
-) -> dict[str, pd.DataFrame]:
-    return {
-        "variable_counts": build_outlier_variable_counts(events),
-        "top_windows": build_top_outlier_windows(events, window, top_windows),
-        "simultaneous": build_top_simultaneous_outliers(events, top_simultaneous),
-    }
-
-
-def build_outlier_variable_counts(events: pd.DataFrame) -> pd.DataFrame:
-    if events.empty:
-        return pd.DataFrame(columns=["variable", "high", "low", "total"])
-
-    counts = events.groupby(["variable", "direction"]).size().unstack(fill_value=0).reset_index()
-    for direction in ["high", "low"]:
-        if direction not in counts.columns:
-            counts[direction] = 0
-
-    counts["total"] = counts["high"] + counts["low"]
-    return counts.sort_values("total", ascending=False)
-
-
-def build_top_outlier_windows(events: pd.DataFrame, window: str = "5min", top_n: int = 20) -> pd.DataFrame:
-    if events.empty:
-        return pd.DataFrame(columns=["window_start", "event_count", "variable_count"])
-
-    windowed = events.copy()
-    windowed["window_start"] = windowed["date"].dt.floor(window)
-    return (
-        windowed.groupby("window_start")
-        .agg(event_count=("variable", "size"), variable_count=("variable", "nunique"))
-        .reset_index()
-        .sort_values("event_count", ascending=False)
-        .head(top_n)
-    )
-
-
-def build_top_simultaneous_outliers(events: pd.DataFrame, top_n: int = 50) -> pd.DataFrame:
-    if events.empty:
-        return pd.DataFrame(columns=["date", "variable_count", "variables"])
-
-    simultaneous = (
-        events.groupby("date")
-        .agg(
-            variable_count=("variable", "nunique"),
-            variables=("variable", lambda values: "; ".join(sorted(set(values)))),
-        )
-        .reset_index()
-    )
-    return simultaneous[simultaneous["variable_count"] >= 2].sort_values("variable_count", ascending=False).head(top_n)
 
 
 # ---------------------------------------------------------------------------
@@ -209,3 +103,88 @@ def summarize_target_transforms(
         summary["window_steps"] = item["window_steps"]
         rows.append(summary)
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Forecast evaluation summaries
+# ---------------------------------------------------------------------------
+# Forecasting modules own model fitting, but metric calculation and window-count
+# summaries are analysis outputs, so they live with the rest of exploration.
+
+def forecast_metrics(actual: pd.Series, forecast: pd.Series) -> dict[str, float]:
+    errors = forecast - actual
+    abs_errors = errors.abs()
+    nonzero_actual = actual.replace(0, np.nan)
+    denominator = (actual.abs() + forecast.abs()).replace(0, np.nan)
+    return {
+        "mae": float(abs_errors.mean()),
+        "rmse": float(np.sqrt(np.mean(np.square(errors)))),
+        "mape": float((abs_errors / nonzero_actual.abs()).mean() * 100),
+        "smape": float((2 * abs_errors / denominator).mean() * 100),
+        "bias": float(errors.mean()),
+    }
+
+
+def build_forecast_metric_row(
+    forecast_frame: pd.DataFrame,
+    exogenous_columns: list[str] | None = None,
+) -> dict[str, Any]:
+    row = {
+        "id_key": forecast_frame["id_key"].iloc[0],
+        "granularity": forecast_frame["granularity"].iloc[0],
+        "model": forecast_frame["model"].iloc[0],
+        "p": int(forecast_frame["p"].iloc[0]),
+        "d": int(forecast_frame["d"].iloc[0]),
+        "q": int(forecast_frame["q"].iloc[0]),
+        "train_rows": int(forecast_frame["train_rows"].iloc[0]),
+        "test_rows": int(forecast_frame["test_rows"].iloc[0]),
+        "warning_count": int(forecast_frame.attrs.get("warning_count", 0)),
+        "warnings": "; ".join(forecast_frame.attrs.get("warnings", [])),
+        **forecast_metrics(forecast_frame["y"], forecast_frame["forecast"]),
+    }
+    if exogenous_columns is not None:
+        row["exogenous_count"] = len(exogenous_columns)
+        row["exogenous_columns"] = "; ".join(exogenous_columns)
+    return row
+
+
+def build_mlp_window_summary(
+    scaled_frame: pd.DataFrame,
+    granularity: str,
+    lookback_steps: int,
+    horizon_steps: int,
+    input_frequency: str,
+) -> pd.DataFrame:
+    train_rows = int((scaled_frame["split"] == "train").sum())
+    test_rows = int((scaled_frame["split"] == "test").sum())
+    train_windows = max(0, train_rows - lookback_steps - horizon_steps + 1)
+    test_windows = max(0, test_rows - lookback_steps - horizon_steps + 1)
+    return pd.DataFrame(
+        [
+            {
+                "granularity": granularity,
+                "input_frequency": input_frequency,
+                "model_family": "MLP",
+                "status": "prepared_not_trained",
+                "feature_source": "scaled target lags only",
+                "target_source": "scaled future target",
+                "lookback_steps": lookback_steps,
+                "horizon_steps": horizon_steps,
+                "lookback_duration": describe_duration(lookback_steps, input_frequency),
+                "horizon_duration": describe_duration(horizon_steps, input_frequency),
+                "train_rows": train_rows,
+                "test_rows": test_rows,
+                "train_windows": train_windows,
+                "test_windows": test_windows,
+                "write_window_data": False,
+            }
+        ]
+    )
+
+
+def describe_duration(steps: int, frequency: str) -> str:
+    try:
+        seconds = pd.to_timedelta(frequency).total_seconds() * steps
+    except ValueError:
+        return f"{steps} x {frequency}"
+    return str(pd.to_timedelta(seconds, unit="s"))

@@ -1,0 +1,35 @@
+{
+  "train_fraction": 0.8,
+  "write_full_forecasts": false,
+  "write_forecast_plots": true,
+  "arima": {
+    "enabled": true,
+    "order": [1, 0, 1],
+    "season_length": 1,
+    "seasonal_order": [0, 0, 0],
+    "method": "CSS-ML"
+  },
+  "univariate": {
+    "enabled": true,
+    "target_granularity": "raw",
+    "scale_target": true,
+    "mlp": {
+      "enabled": false,
+      "input_frequency": "5s",
+      "lookback_steps": 60,
+      "horizon_steps": 60,
+      "hidden_layer_sizes": [64, 32],
+      "activation": "relu",
+      "max_iter": 300,
+      "random_state": 42,
+      "write_window_data": false
+    }
+  },
+  "multivariate": {
+    "enabled": false,
+    "target_granularities": ["30s", "1min", "5min"],
+    "feature_set": "candidate_b_non_target",
+    "standardize_exogenous": true,
+    "max_train_rows": 12000
+  }
+}

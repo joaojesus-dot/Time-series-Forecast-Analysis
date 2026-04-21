@@ -1,0 +1,21 @@
+{
+  "granularity_options": {
+    "raw": null,
+    "30s": "30s",
+    "1min": "1min",
+    "5min": "5min"
+  },
+  "resampling_policy": {
+    "timestamp_column": "date",
+    "input_frequency": "5s",
+    "label": "right",
+    "closed": "left",
+    "origin": "start",
+    "drop_partial_windows": true,
+    "default_aggregation": "mean",
+    "column_aggregations": {
+      "TV_8329ZC.AV_0#": "last",
+      "YJJWSLL.AV_0#": "mean"
+    }
+  }
+}

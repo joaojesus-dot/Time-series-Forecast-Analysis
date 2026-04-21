@@ -29,12 +29,6 @@ def write_plot_specs(plot_specs: list[dict[str, Any]], frames: dict[str, pd.Data
         "stacked_time_series": _plot_stacked_time_series,
         "target_granularity_comparison": _plot_target_granularity_comparison,
         "heatmap": _plot_heatmap_from_spec,
-        "hist_grid_by_dataset": _plot_hist_grid_by_dataset,
-        "standardized_boxplots": _plot_standardized_boxplots,
-        "barh": _plot_barh,
-        "window_bar": _plot_window_bar,
-        "simultaneous_counts": _plot_simultaneous_counts,
-        "outlier_timeline": _plot_outlier_timeline,
         "target_transform_plots": _plot_target_transform_plots,
         "smoothing_std_summary": _plot_smoothing_std_summary,
     }
@@ -168,81 +162,6 @@ def _plot_standardized_boxplots(spec: dict[str, Any], frames: dict[str, pd.DataF
 
 
 # ---------------------------------------------------------------------------
-# Outlier plots
-# ---------------------------------------------------------------------------
-# Outlier visuals are intentionally compact: counts by variable, dense windows,
-# simultaneous events, and a timeline. Large timestamp-level CSVs are avoided
-# unless there is a corresponding plot that makes them reviewable.
-
-def _plot_barh(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
-    frame = frames[str(spec["frame"])]
-    if frame.empty:
-        return
-
-    sort_by = str(spec.get("sort_by", spec["x"]))
-    fig, axis = plt.subplots(figsize=spec.get("figsize", (10, 6)))
-    frame.sort_values(sort_by).plot(
-        x=spec["y"],
-        y=spec["x"],
-        kind="barh",
-        ax=axis,
-        color=spec.get("color", "#ba4e00"),
-    )
-    axis.set_title(spec["title"])
-    axis.set_xlabel(spec["xlabel"])
-    axis.set_ylabel(spec["ylabel"])
-    legend = axis.get_legend()
-    if legend is not None:
-        legend.remove()
-    _save_figure(fig, Path(spec["output_path"]))
-
-
-def _plot_window_bar(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
-    frame = frames[str(spec["frame"])].copy()
-    if frame.empty:
-        return
-
-    frame["label"] = frame[str(spec.get("label_column", "window_start"))].astype(str)
-    fig, axis = plt.subplots(figsize=spec.get("figsize", (12, 7)))
-    sns.barplot(data=frame, y="label", x=spec["x"], ax=axis, color=spec.get("color", "#b85c38"))
-    axis.set_title(spec["title"])
-    axis.set_xlabel(spec["xlabel"])
-    axis.set_ylabel(spec["ylabel"])
-    _save_figure(fig, Path(spec["output_path"]))
-
-
-def _plot_simultaneous_counts(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
-    frame = frames[str(spec["frame"])]
-    if frame.empty:
-        return
-
-    counts = frame["variable_count"].value_counts().sort_index().reset_index()
-    counts.columns = ["simultaneous_variable_count", "timestamp_count"]
-    fig, axis = plt.subplots(figsize=(8, 5))
-    sns.barplot(data=counts, x="simultaneous_variable_count", y="timestamp_count", ax=axis, color="#11875d")
-    axis.set_title(spec["title"])
-    axis.set_xlabel("Variables outlying at the same timestamp")
-    axis.set_ylabel("Timestamp count")
-    _save_figure(fig, Path(spec["output_path"]))
-
-
-def _plot_outlier_timeline(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
-    frame = frames[str(spec["frame"])]
-    if frame.empty:
-        return
-
-    timeline = frame.copy()
-    timeline["window_start"] = timeline["date"].dt.floor(str(spec.get("window", "5min")))
-    timeline = timeline.groupby("window_start").size().reset_index(name="event_count")
-    fig, axis = plt.subplots(figsize=(14, 5))
-    axis.plot(timeline["window_start"], timeline["event_count"], linewidth=1.2, color="#8a3ffc")
-    axis.set_title(spec["title"])
-    axis.set_xlabel("date")
-    axis.set_ylabel("Outlier event count")
-    _save_figure(fig, Path(spec["output_path"]))
-
-
-# ---------------------------------------------------------------------------
 # Target preprocessing plots
 # ---------------------------------------------------------------------------
 # Smoothing and first-difference plots are generated from cached transform
@@ -277,7 +196,7 @@ def _plot_smoothing_std_summary(spec: dict[str, Any], frames: dict[str, pd.DataF
     frame = frames[str(spec["frame"])].copy()
     frame["transform_label"] = frame["transform"] + " (" + frame["window"] + ")"
     level_frame = frame[frame["transform"] != "first_difference"]
-    differenced_frame = frame[frame["transform"] == "first_difference"]
+    differenced_frame = frame[frame["transform"].isin(["first_difference", "second_difference"])]
 
     fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=False)
     sns.barplot(data=level_frame, x="granularity", y="std", hue="transform_label", ax=axes[0])
@@ -286,10 +205,11 @@ def _plot_smoothing_std_summary(spec: dict[str, Any], frames: dict[str, pd.DataF
     axes[0].set_ylabel("Level std")
     axes[0].legend(loc="upper right", fontsize=8)
 
-    sns.barplot(data=differenced_frame, x="granularity", y="std", ax=axes[1], color="#b55d60")
-    axes[1].set_title("First-Difference Std By Granularity")
+    sns.barplot(data=differenced_frame, x="granularity", y="std", hue="transform", ax=axes[1])
+    axes[1].set_title("Difference Std By Granularity")
     axes[1].set_xlabel("Granularity")
     axes[1].set_ylabel("Delta std")
+    axes[1].legend(loc="upper right", fontsize=8)
     _save_figure(fig, Path(spec["output_path"]))
 
 
@@ -394,6 +314,65 @@ def _steps_for_duration(dates: pd.Series, duration: str) -> int:
         return 1
     seconds_per_step = max(float(diffs.median()), 1.0)
     return max(1, round(pd.Timedelta(duration).total_seconds() / seconds_per_step))
+
+
+# ---------------------------------------------------------------------------
+# Forecasting plots
+# ---------------------------------------------------------------------------
+# Forecasting modules pass already-evaluated forecast frames here. This keeps
+# model fitting separate from visual diagnostics.
+
+def write_forecast_plot(
+    id_key: str,
+    granularity: str,
+    train_frame: pd.DataFrame,
+    test_frame: pd.DataFrame,
+    forecast_frames: list[pd.DataFrame],
+    output_dir: Path,
+    model_family: str,
+) -> None:
+    fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+    train_tail = train_frame.tail(min(len(train_frame), len(test_frame)))
+
+    axes[0].plot(train_tail["ds"], train_tail["y"], linewidth=0.9, color="#888888", label="train tail")
+    axes[0].plot(test_frame["ds"], test_frame["y"], linewidth=1.0, color="#222222", label="test actual")
+    for forecast_frame in forecast_frames:
+        axes[0].plot(
+            forecast_frame["ds"],
+            forecast_frame["forecast"],
+            linewidth=1.0,
+            label=str(forecast_frame["model"].iloc[0]),
+        )
+    axes[0].axvline(test_frame["ds"].iloc[0], color="#333333", linewidth=0.9, linestyle="--")
+    axes[0].set_title(f"{id_key} - 80/20 {model_family} Forecast")
+    axes[0].set_ylabel("Target")
+    axes[0].legend(loc="upper right", fontsize=8)
+
+    for forecast_frame in forecast_frames:
+        axes[1].plot(
+            forecast_frame["ds"],
+            forecast_frame["forecast"] - forecast_frame["y"],
+            linewidth=1.0,
+            label=str(forecast_frame["model"].iloc[0]),
+        )
+    axes[1].axhline(0, color="#333333", linewidth=0.8)
+    axes[1].set_title("Forecast Error")
+    axes[1].set_xlabel("date")
+    axes[1].set_ylabel("Forecast - actual")
+    axes[1].legend(loc="upper right", fontsize=8)
+    _save_figure(fig, output_dir / f"{id_key}_{model_family.lower()}_forecast.png")
+
+
+def write_forecast_metrics_plot(metrics: pd.DataFrame, output_path: Path) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    for axis, metric in zip(axes, ["mae", "rmse"]):
+        pivot = metrics.pivot(index="granularity", columns="model", values=metric)
+        pivot.plot(kind="bar", ax=axis)
+        axis.set_title(metric.upper())
+        axis.set_xlabel("Granularity")
+        axis.set_ylabel(metric.upper())
+        axis.legend(loc="upper right", fontsize=8)
+    _save_figure(fig, output_path)
 
 
 def _save_figure(fig: plt.Figure, output_path: Path) -> None:

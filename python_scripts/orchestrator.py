@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -11,21 +12,11 @@ import pandas as pd
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from extraction import DATASET_ANALYZERS
-    from exploration import (
-        build_granularity_summary,
-        locate_iqr_outliers,
-        summarize_outliers,
-        summarize_target_transforms,
-        summarize_variables,
-    )
-    from forecasting import (
-        prune_forecasting_outputs,
-        run_arimax_forecasts,
-        run_univariate_arima_forecasts,
-        write_arima_arimax_comparison,
-    )
+    from exploration import build_granularity_summary, summarize_target_transforms, summarize_variables
+    from forecasting import run_forecasting_pipeline
     from plots import write_plot_specs
     from preprocessing import (
+        build_feature_selection,
         build_feature_subset,
         build_granularity_versions,
         build_target_transform_series,
@@ -34,21 +25,11 @@ if __package__ in {None, ""}:
     from reports import write_documentation_outputs
 else:
     from .extraction import DATASET_ANALYZERS
-    from .exploration import (
-        build_granularity_summary,
-        locate_iqr_outliers,
-        summarize_outliers,
-        summarize_target_transforms,
-        summarize_variables,
-    )
-    from .forecasting import (
-        prune_forecasting_outputs,
-        run_arimax_forecasts,
-        run_univariate_arima_forecasts,
-        write_arima_arimax_comparison,
-    )
+    from .exploration import build_granularity_summary, summarize_target_transforms, summarize_variables
+    from .forecasting import run_forecasting_pipeline
     from .plots import write_plot_specs
     from .preprocessing import (
+        build_feature_selection,
         build_feature_subset,
         build_granularity_versions,
         build_target_transform_series,
@@ -61,7 +42,7 @@ CONFIG_DIR = Path(__file__).resolve().parent / "config"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Write boiler-only KDD and physical-analysis outputs.")
+    parser = argparse.ArgumentParser(description="Write boiler-only KDD and forecasting outputs.")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
     parser.add_argument("--skip-forecasting", action="store_true")
@@ -69,110 +50,102 @@ def main() -> int:
 
     dataset_name = "chinese_boiler_dataset"
     dataset_output = args.output_dir / dataset_name
-    data_output = dataset_output / "data"
+    reports_output = dataset_output / "reports"
+    tables_output = dataset_output / "tables"
     plots_output = dataset_output / "plots"
+    exploratory_plots_output = plots_output / "exploratory"
     reduced_plots_output = plots_output / "reduced_subsets"
-    distribution_plots_output = plots_output / "distribution"
-    outlier_plots_output = plots_output / "outliers"
-    preprocessing_plots_output = plots_output / "preprocessing"
+    pre_forecasting_plots_output = plots_output / "pre_forecasting"
     forecasting_output = dataset_output / "forecasting"
+    forecasting_reports_output = reports_output / "forecasting"
+    forecasting_plots_output = plots_output / "forecasting"
+    derived_data_output = args.data_dir / dataset_name / "derived"
 
-    # The orchestrator owns the KDD execution order. The lower-level modules only
-    # transform data, calculate summaries, write plots, or write reports.
+    prepare_output_tree(dataset_output, args.data_dir / dataset_name)
     for directory in [
-        dataset_output,
-        data_output,
+        reports_output,
+        tables_output,
+        exploratory_plots_output,
         reduced_plots_output,
-        distribution_plots_output,
-        outlier_plots_output,
-        preprocessing_plots_output,
+        pre_forecasting_plots_output,
         forecasting_output,
+        forecasting_reports_output,
+        forecasting_plots_output,
+        derived_data_output,
     ]:
         directory.mkdir(parents=True, exist_ok=True)
 
-    feature_selection = json.loads((CONFIG_DIR / "boiler_feature_selection.json").read_text(encoding="utf-8"))
     family_reduction_rows = json.loads((CONFIG_DIR / "boiler_family_reduction.json").read_text(encoding="utf-8"))
+    preprocessing_config = json.loads((CONFIG_DIR / "boiler_preprocessing.json").read_text(encoding="utf-8"))
+    forecasting_config = json.loads((CONFIG_DIR / "boiler_forecasting.json").read_text(encoding="utf-8"))
     plot_config = json.loads((CONFIG_DIR / "boiler_plot_specs.json").read_text(encoding="utf-8"))
-    target_column = feature_selection["target_column"]
-    candidate_a_features = feature_selection["candidate_a_features"]
-    candidate_b_features = candidate_a_features + feature_selection["candidate_b_additions"]
-    candidate_c_features = candidate_b_features + feature_selection["candidate_c_additions"]
-    resampling_policy = feature_selection["resampling_policy"]
+    feature_selection = build_feature_selection(family_reduction_rows)
+    target_column = str(feature_selection["target_column"])
+    candidate_b_features = list(feature_selection["candidate_b_features"])
+    candidate_c_features = list(feature_selection["candidate_c_features"])
+    granularity_options = preprocessing_config["granularity_options"]
+    resampling_policy = preprocessing_config["resampling_policy"]
 
+    # The orchestrator owns the KDD execution order. Lower-level modules only
+    # transform data, calculate summaries, write plots, or write reports.
     quality_report = DATASET_ANALYZERS[dataset_name](args.data_dir / dataset_name)
-    quality_path = dataset_output / "data_quality.md"
-    quality_path.write_text(quality_report, encoding="utf-8")
-    print(f"Wrote {quality_path}")
 
     # Build the repaired working dataset once. All later summaries and plots use
-    # this same source so that every artifact is traceable to one cleaned frame.
+    # this same source so every artifact is traceable to one cleaned frame.
     repaired = load_repaired_boiler_frame(args.data_dir / dataset_name)
-    repaired_path = data_output / "boiler_repaired.csv"
+    repaired_path = derived_data_output / "boiler_repaired.csv"
     write_csv_output(repaired, repaired_path)
 
     # Candidate B is the main forecasting feature set. Candidate C adds control
     # signals and is kept as a control-aware comparison for later modeling.
     subset_b_base = build_feature_subset(repaired, target_column, candidate_b_features)
     subset_c_base = build_feature_subset(repaired, target_column, candidate_c_features)
-    write_csv_output(subset_c_base, data_output / "subset_C.csv")
+    write_csv_output(subset_c_base, derived_data_output / "subset_C.csv")
 
     # Generate all Candidate B granularities from the same base frame. This keeps
     # raw, 30s, 1min, and 5min datasets aligned in schema and naming.
     subset_b_datasets = build_granularity_versions(
         subset_b_base,
-        feature_selection["granularity_options"],
+        granularity_options,
         dataset_name="subset_B",
         timestamp_column=str(resampling_policy["timestamp_column"]),
         resampling_policy=resampling_policy,
     )
     for id_key, dataset in subset_b_datasets.items():
-        write_csv_output(dataset, data_output / f"{id_key}.csv")
-    write_csv_output(subset_b_datasets["subset_B_raw"], data_output / "subset_B.csv")
+        write_csv_output(dataset, derived_data_output / f"{id_key}.csv")
+    write_csv_output(subset_b_datasets["subset_B_raw"], derived_data_output / "subset_B.csv")
 
     granularity_summary = build_granularity_summary(subset_b_datasets, dataset_name="subset_B")
-    write_csv_output(granularity_summary, data_output / "granularity_summary.csv")
-
-    # Distribution and outlier analysis share the same IQR bounds. This avoids
-    # recalculating thresholds and keeps the outlier reports consistent with the
-    # distribution tables.
     distribution_summary = summarize_variables(subset_b_datasets)
-    write_csv_output(distribution_summary, data_output / "distribution_summary.csv")
 
-    outlier_events = locate_iqr_outliers(subset_b_datasets["subset_B_raw"], distribution_summary, "subset_B_raw")
-    outlier_summary = summarize_outliers(outlier_events)
-    write_csv_output(outlier_summary["variable_counts"], data_output / "outlier_variable_counts.csv")
-    write_csv_output(outlier_summary["top_windows"], data_output / "outlier_top_windows.csv")
-    write_csv_output(outlier_summary["simultaneous"], data_output / "outlier_top_simultaneous_events.csv")
-
-    # Smoothing and differencing are diagnostic transforms for ARIMA/LSTM
-    # preparation. They do not replace the level target unless modeling later
-    # proves they improve forecasting.
+    # Smoothing and differencing are diagnostic transforms for ARIMA/MLP
+    # preparation. They do not replace the level target by default.
     transform_series = build_target_transform_series(subset_b_datasets, target_column, plot_config["smoothing_windows"])
     smoothing_summary = summarize_target_transforms(transform_series, target_column)
-    write_csv_output(smoothing_summary, data_output / "smoothing_differencing_summary.csv")
+
+    write_excel_workbook(
+        tables_output / "pre_forecasting_summary.xlsx",
+        {
+            "granularity": granularity_summary,
+            "target_distribution": distribution_summary[distribution_summary["variable"] == target_column],
+            "target_transforms": smoothing_summary,
+        },
+    )
 
     frames = {
         "repaired": repaired,
         "subset_C": subset_c_base,
-        "outlier_events": outlier_events,
-        "outlier_variable_counts": outlier_summary["variable_counts"],
-        "outlier_top_windows": outlier_summary["top_windows"],
-        "outlier_simultaneous": outlier_summary["simultaneous"],
         "smoothing_summary": smoothing_summary,
         **subset_b_datasets,
     }
-
     output_dirs = {
-        "plots": plots_output,
+        "exploratory_plots": exploratory_plots_output,
         "reduced_plots": reduced_plots_output,
-        "distribution_plots": distribution_plots_output,
-        "outlier_plots": outlier_plots_output,
-        "preprocessing_plots": preprocessing_plots_output,
+        "pre_forecasting_plots": pre_forecasting_plots_output,
     }
     write_plot_specs(
         build_boiler_plot_specs(
             plot_config,
-            feature_selection,
             target_column,
             subset_b_datasets,
             transform_series,
@@ -182,51 +155,104 @@ def main() -> int:
     )
 
     write_documentation_outputs(
-        output_folder=dataset_output,
-        data_dir=data_output,
-        repaired_filename=repaired_path.name,
+        reports_dir=reports_output,
+        repaired_filename=repaired_path.as_posix(),
         target_column=target_column,
         feature_selection=feature_selection,
-        family_reduction_rows=family_reduction_rows,
+        quality_report=quality_report,
         resampling_policy=resampling_policy,
         granularity_summary=granularity_summary,
         distribution_summary=distribution_summary,
-        outlier_summary=outlier_summary,
         smoothing_summary=smoothing_summary,
     )
     if not args.skip_forecasting:
-        prune_forecasting_outputs(forecasting_output, feature_selection["forecasting_policy"])
-        arima_results = run_univariate_arima_forecasts(
+        forecasting_results = run_forecasting_pipeline(
             datasets=subset_b_datasets,
             target_column=target_column,
-            granularity_options=feature_selection["granularity_options"],
+            granularity_options=granularity_options,
             resampling_policy=resampling_policy,
-            forecasting_policy=feature_selection["forecasting_policy"],
+            forecasting_policy=forecasting_config,
             output_dir=forecasting_output,
+            reports_dir=forecasting_reports_output,
+            plots_dir=forecasting_plots_output,
+            derived_data_dir=derived_data_output,
             timestamp_column=str(resampling_policy["timestamp_column"]),
         )
-        arimax_results = run_arimax_forecasts(
-            datasets=subset_b_datasets,
-            target_column=target_column,
-            granularity_options=feature_selection["granularity_options"],
-            resampling_policy=resampling_policy,
-            forecasting_policy=feature_selection["forecasting_policy"],
-            output_dir=forecasting_output,
-            timestamp_column=str(resampling_policy["timestamp_column"]),
-        )
-        write_arima_arimax_comparison(arima_results["metrics"], arimax_results["metrics"], forecasting_output)
+        write_forecasting_summary_workbook(tables_output / "forecasting_summary.xlsx", forecasting_results)
     return 0
 
 
+def prepare_output_tree(dataset_output: Path, dataset_data_dir: Path) -> None:
+    """Remove obsolete generated folders from the previous output layout."""
+    obsolete_paths = [
+        dataset_output / "data",
+        dataset_output / "forecasting",
+        dataset_output / "plots",
+        dataset_output / "data_quality.md",
+        dataset_output / "distribution_analysis.md",
+        dataset_output / "exploration_findings.md",
+        dataset_output / "feature_selection_note.json",
+        dataset_output / "granularity_analysis.md",
+        dataset_output / "outlier_analysis.md",
+        dataset_output / "physical_analysis.md",
+        dataset_output / "presentation_findings.md",
+        dataset_output / "smoothing_differencing_analysis.md",
+        dataset_output / "plots" / "distribution",
+        dataset_output / "plots" / "outliers",
+        dataset_output / "plots" / "preprocessing",
+        dataset_data_dir / "derived",
+        dataset_data_dir / "feature_selection_note.json",
+    ]
+    for path in obsolete_paths:
+        remove_generated_path(path, dataset_output, dataset_data_dir)
+
+
+def remove_generated_path(path: Path, dataset_output: Path, dataset_data_dir: Path) -> None:
+    resolved_path = path.resolve()
+    allowed_roots = [dataset_output.resolve(), dataset_data_dir.resolve()]
+    if not any(resolved_path == root or root in resolved_path.parents for root in allowed_roots):
+        raise ValueError(f"Refusing to remove path outside generated output roots: {resolved_path}")
+    if not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
 def write_csv_output(frame: pd.DataFrame, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_name(f".{output_path.name}.tmp")
     frame.to_csv(temp_path, index=False)
     temp_path.replace(output_path)
 
 
+def write_excel_workbook(output_path: Path, sheets: dict[str, pd.DataFrame]) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = output_path.with_name(f".{output_path.name}.tmp.xlsx")
+    with pd.ExcelWriter(temp_path) as writer:
+        for sheet_name, frame in sheets.items():
+            frame.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+    temp_path.replace(output_path)
+
+
+def write_forecasting_summary_workbook(
+    output_path: Path,
+    forecasting_results: dict[str, dict[str, pd.DataFrame]],
+) -> None:
+    """Collect small forecasting summary frames into one reviewable workbook."""
+    sheets = {}
+    for analysis_name, result_frames in forecasting_results.items():
+        for frame_name, frame in result_frames.items():
+            if frame_name == "forecasts" or frame.empty:
+                continue
+            sheets[f"{analysis_name}_{frame_name}"] = frame
+    if sheets:
+        write_excel_workbook(output_path, sheets)
+
+
 def build_boiler_plot_specs(
     plot_config: dict[str, Any],
-    feature_selection: dict[str, Any],
     target_column: str,
     subset_b_datasets: dict[str, Any],
     transform_series: list[dict[str, Any]],
@@ -236,36 +262,15 @@ def build_boiler_plot_specs(
     # This function only resolves runtime values that JSON cannot hold:
     # filesystem paths, selected dataset keys, target column, and transform series.
     dataset_keys = list(subset_b_datasets)
-    specs = [
-        _resolve_plot_spec(spec, feature_selection, target_column, dataset_keys, transform_series, output_dirs)
+    return [
+        _resolve_plot_spec(spec, plot_config, target_column, dataset_keys, transform_series, output_dirs)
         for spec in plot_config["plot_specs"]
     ]
-
-    for family_name, columns in plot_config["heatmap_families"].items():
-        specs.append(
-            _resolve_plot_spec(
-                {
-                    "kind": "heatmap",
-                    "frame": "repaired",
-                    "sample_step": 20,
-                    "columns": columns,
-                    "title": f"Boiler {family_name.replace('_', ' ').title()} Heatmap",
-                    "output_path_ref": ["plots", f"boiler_{family_name}_heatmap.png"],
-                },
-                feature_selection,
-                target_column,
-                dataset_keys,
-                transform_series,
-                output_dirs,
-            )
-        )
-
-    return specs
 
 
 def _resolve_plot_spec(
     spec: dict[str, Any],
-    feature_selection: dict[str, Any],
+    plot_config: dict[str, Any],
     target_column: str,
     dataset_keys: list[str],
     transform_series: list[dict[str, Any]],
@@ -274,9 +279,9 @@ def _resolve_plot_spec(
     resolved = dict(spec)
 
     if resolved.pop("groups_ref", None) == "candidate_b_plot_groups":
-        resolved["groups"] = feature_selection["candidate_b_plot_groups"]
+        resolved["groups"] = plot_config["candidate_b_plot_groups"]
     if resolved.pop("units_ref", None) == "assumed_plot_units":
-        resolved["units"] = feature_selection["assumed_plot_units"]
+        resolved["units"] = plot_config["assumed_plot_units"]
     if resolved.pop("dataset_keys_ref", None) == "subset_b_datasets":
         resolved["dataset_keys"] = dataset_keys
     if resolved.pop("target_column_ref", False):

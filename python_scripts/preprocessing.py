@@ -39,6 +39,43 @@ def build_feature_subset(
     return dataset[[timestamp_column, target_column, *feature_columns]].copy()
 
 
+def build_feature_selection(family_reduction_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Derive forecasting subsets from the family-reduction config."""
+    target_column = find_target_column(family_reduction_rows)
+    return {
+        "target_column": target_column,
+        "candidate_a_features": variables_for_candidate(family_reduction_rows, "A", target_column),
+        "candidate_b_features": variables_for_candidate(family_reduction_rows, "B", target_column),
+        "candidate_c_features": variables_for_candidate(family_reduction_rows, "C", target_column),
+    }
+
+
+def find_target_column(family_reduction_rows: list[dict[str, Any]]) -> str:
+    """Read the single target variable marked in the family-reduction config."""
+    for row in family_reduction_rows:
+        for representative in row.get("representative_variables", []):
+            if representative.get("role") == "target":
+                return str(representative["name"])
+    raise ValueError("No target representative found in family reduction config.")
+
+
+def variables_for_candidate(
+    family_reduction_rows: list[dict[str, Any]],
+    candidate: str,
+    target_column: str,
+) -> list[str]:
+    """Return non-target representative variables assigned to one candidate set."""
+    variables = []
+    for row in family_reduction_rows:
+        for representative in row.get("representative_variables", []):
+            name = str(representative["name"])
+            if name == target_column:
+                continue
+            if candidate in representative.get("candidates", []):
+                variables.append(name)
+    return variables
+
+
 # ---------------------------------------------------------------------------
 # Granularity handling
 # ---------------------------------------------------------------------------
@@ -206,6 +243,17 @@ def build_target_transform_series(
         transform_series.append(
             _transform_record(id_key, granularity, "first_difference", "none", 1, frame[timestamp_column], target.diff())
         )
+        transform_series.append(
+            _transform_record(
+                id_key,
+                granularity,
+                "second_difference",
+                "none",
+                1,
+                frame[timestamp_column],
+                target.diff().diff(),
+            )
+        )
 
     return transform_series
 
@@ -228,3 +276,119 @@ def _transform_record(
         "dates": dates,
         "values": values,
     }
+
+
+# ---------------------------------------------------------------------------
+# Forecasting frame preparation
+# ---------------------------------------------------------------------------
+# Forecasting models need strict timestamp ordering, chronological splits, and
+# scalers fitted only on training data. These are data-preparation concerns, so
+# the model-specific modules reuse the helpers here instead of reimplementing
+# them.
+
+def build_forecasting_frame(
+    dataset: pd.DataFrame,
+    id_key: str,
+    target_column: str,
+    timestamp_column: str = "date",
+    exogenous_columns: list[str] | None = None,
+) -> pd.DataFrame:
+    selected_columns = [timestamp_column, target_column] + list(exogenous_columns or [])
+    frame = dataset[selected_columns].copy()
+    frame[timestamp_column] = pd.to_datetime(frame[timestamp_column], errors="coerce")
+    frame[target_column] = pd.to_numeric(frame[target_column], errors="coerce")
+    for column in exogenous_columns or []:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+
+    frame = frame.dropna(subset=selected_columns).sort_values(timestamp_column)
+    frame = frame.rename(columns={timestamp_column: "ds", target_column: "y"}).assign(unique_id=id_key)
+    return frame[["unique_id", "ds", "y"] + list(exogenous_columns or [])]
+
+
+def split_train_test(frame: pd.DataFrame, train_fraction: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if not 0 < train_fraction < 1:
+        raise ValueError("train_fraction must be between 0 and 1.")
+    split_index = int(len(frame) * train_fraction)
+    if split_index <= 0 or split_index >= len(frame):
+        raise ValueError("train_fraction creates an empty train or test set.")
+    return frame.iloc[:split_index].copy(), frame.iloc[split_index:].copy()
+
+
+def infer_exogenous_columns(dataset: pd.DataFrame, target_column: str, timestamp_column: str = "date") -> list[str]:
+    excluded = {target_column, timestamp_column}
+    return [
+        column
+        for column in dataset.columns
+        if column not in excluded and pd.api.types.is_numeric_dtype(dataset[column])
+    ]
+
+
+def fit_standard_scaler(series: pd.Series) -> dict[str, float]:
+    mean = float(series.mean())
+    std = float(series.std(ddof=0))
+    if pd.isna(std) or std == 0:
+        std = 1.0
+    return {"mean": mean, "std": std}
+
+
+def apply_standard_scaler(series: pd.Series, scaler: dict[str, float]) -> pd.Series:
+    return (series - scaler["mean"]) / scaler["std"]
+
+
+def standardize_columns(
+    train_frame: pd.DataFrame,
+    test_frame: pd.DataFrame,
+    columns: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    train_frame = train_frame.copy()
+    test_frame = test_frame.copy()
+    for column in columns:
+        scaler = fit_standard_scaler(train_frame[column])
+        train_frame[column] = apply_standard_scaler(train_frame[column], scaler)
+        test_frame[column] = apply_standard_scaler(test_frame[column], scaler)
+    return train_frame, test_frame
+
+
+def build_scaled_target_frame(
+    frame: pd.DataFrame,
+    train_fraction: float,
+    granularity: str,
+    target_column: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    train_frame, test_frame = split_train_test(frame, train_fraction)
+    scaler = fit_standard_scaler(train_frame["y"])
+
+    scaled_frame = pd.concat([train_frame.assign(split="train"), test_frame.assign(split="test")], ignore_index=True)
+    scaled_frame["y_scaled"] = apply_standard_scaler(scaled_frame["y"], scaler)
+    scaling_summary = pd.DataFrame(
+        [
+            {
+                "granularity": granularity,
+                "target_column": target_column,
+                "scaler": "standard",
+                "fit_split": "train",
+                "train_rows": len(train_frame),
+                "test_rows": len(test_frame),
+                "train_mean": scaler["mean"],
+                "train_std": scaler["std"],
+                "train_start": train_frame["ds"].iloc[0],
+                "train_end": train_frame["ds"].iloc[-1],
+                "test_start": test_frame["ds"].iloc[0],
+                "test_end": test_frame["ds"].iloc[-1],
+            }
+        ]
+    )
+    return scaled_frame, scaling_summary
+
+
+def statsforecast_frequency(
+    granularity: str,
+    granularity_options: dict[str, str | None],
+    resampling_policy: dict[str, Any],
+) -> str:
+    if granularity == "raw":
+        return str(resampling_policy["input_frequency"])
+    frequency = granularity_options.get(granularity)
+    if frequency is None:
+        raise ValueError(f"Could not infer frequency for granularity '{granularity}'.")
+    return str(frequency)

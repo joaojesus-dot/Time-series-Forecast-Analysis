@@ -1,2 +1,0 @@
-id_key,granularity,train_rows,max_train_rows,reason
-subset_B_raw,raw,69120,12000,Skipped because statsforecast ARIMA with exogenous regressors performs a dense SVD that is not memory-safe at this row count.
