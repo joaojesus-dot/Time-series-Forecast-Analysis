@@ -1,0 +1,16 @@
+granularity,candidate_label,status,difference_order,transform_name,training_smoothing_window,lookback_duration,lookback_steps,horizon_duration,horizon_steps,train_windows,validation_windows,test_windows
+30s,30s_d0_smooth_none,windows_prepared,0,level,none,10min,20,10min,20,10041,1400,2842
+30s,30s_d0_smooth_30s,windows_prepared,0,level,30s,10min,20,10min,20,10041,1400,2842
+30s,30s_d0_smooth_1min,windows_prepared,0,level,1min,10min,20,10min,20,10040,1400,2842
+30s,30s_d1_smooth_none,windows_prepared,1,first_difference,none,10min,20,10min,20,10040,1399,2841
+30s,30s_d1_smooth_30s,windows_prepared,1,first_difference,30s,10min,20,10min,20,10040,1399,2841
+30s,30s_d1_smooth_1min,windows_prepared,1,first_difference,1min,10min,20,10min,20,10039,1399,2841
+30s,30s_d2_smooth_none,windows_prepared,2,second_difference,none,10min,20,10min,20,10039,1398,2840
+30s,30s_d2_smooth_30s,windows_prepared,2,second_difference,30s,10min,20,10min,20,10039,1398,2840
+30s,30s_d2_smooth_1min,windows_prepared,2,second_difference,1min,10min,20,10min,20,10038,1398,2840
+1min,1min_d0_smooth_none,windows_prepared,0,level,none,10min,10,10min,10,5021,700,1422
+1min,1min_d0_smooth_1min,windows_prepared,0,level,1min,10min,10,10min,10,5021,700,1422
+1min,1min_d1_smooth_none,windows_prepared,1,first_difference,none,10min,10,10min,10,5020,699,1421
+1min,1min_d1_smooth_1min,windows_prepared,1,first_difference,1min,10min,10,10min,10,5020,699,1421
+1min,1min_d2_smooth_none,windows_prepared,2,second_difference,none,10min,10,10min,10,5019,698,1420
+1min,1min_d2_smooth_1min,windows_prepared,2,second_difference,1min,10min,10,10min,10,5019,698,1420

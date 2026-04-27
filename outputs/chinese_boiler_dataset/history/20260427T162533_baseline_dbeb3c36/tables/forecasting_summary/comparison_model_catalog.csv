@@ -1,0 +1,3 @@
+analysis,model_key,model_label,status,granularity_count,supported_splits,config_summary,report_path,target_horizon
+univariate,univariate_arima,Univariate ARIMA,evaluated,4,test,"enabled=True, method=CSS-ML, order=[1,0,1], season_length=1, seasonal_order=[0,0,0]",models/univariate_arima.md,10min
+univariate,univariate_mlp_target_lags,Univariate MLP Target Lags,evaluated,4,"validation,test","activation=relu, enabled=True, hidden_layer_sizes=[64,32], max_iter=300, random_state=42, write_window_data=False",models/univariate_mlp_target_lags.md,10min

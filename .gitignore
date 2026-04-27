@@ -7,3 +7,4 @@ __pycache__/
 data/*
 !data/chinese_boiler_dataset/
 !data/chinese_boiler_dataset/**
+.codex/config.toml

@@ -1,33 +1,62 @@
 {
-  "train_fraction": 0.8,
+  "experimental_protocol": {
+    "dataset_prefix": "subset_B",
+    "target_granularities": ["30s", "1min"],
+    "forecast_horizon": "10min",
+    "lookback_window": "10min",
+    "profiling_granularities": ["raw", "30s", "1min"],
+    "differentiation_orders": [0, 1, 2],
+    "train_only_smoothing_windows": ["none", "30s", "1min"],
+    "splits": {
+      "train": 0.7,
+      "validation": 0.1,
+      "test": 0.2
+    },
+    "scaling": {
+      "method": "minmax",
+      "fit_split": "train"
+    },
+    "metrics": ["mae", "rmse", "mape", "smape", "bias"],
+    "supervised_window": {
+      "input": "target_lags_only",
+      "target": "value_at_forecast_horizon",
+      "allow_split_boundary_crossing": false
+    }
+  },
   "write_full_forecasts": false,
   "write_forecast_plots": true,
-  "arima": {
+  "run_tracking": {
     "enabled": true,
-    "order": [1, 0, 1],
-    "season_length": 1,
-    "seasonal_order": [0, 0, 0],
-    "method": "CSS-ML"
+    "tag": "baseline",
+    "history_root": "history",
+    "copy_plots": true
   },
   "univariate": {
     "enabled": true,
-    "target_granularity": "raw",
     "scale_target": true,
+    "arima": {
+      "enabled": true,
+      "order": [1, 0, 1],
+      "season_length": 1,
+      "seasonal_order": [0, 0, 0],
+      "method": "CSS-ML"
+    },
     "mlp": {
-      "enabled": false,
-      "input_frequency": "5s",
-      "lookback_steps": 60,
-      "horizon_steps": 60,
-      "hidden_layer_sizes": [64, 32],
+      "enabled": true,
+      "hidden_units_strategy": "match_lookback",
       "activation": "relu",
-      "max_iter": 300,
+      "solver": "sgd",
+      "learning_rate": "adaptive",
+      "initial_learning_rate_grid": [0.001, 0.005, 0.01],
+      "max_iter": 5000,
       "random_state": 42,
+      "selection_mode": "validation_recommendation",
       "write_window_data": false
     }
   },
   "multivariate": {
     "enabled": false,
-    "target_granularities": ["30s", "1min", "5min"],
+    "target_granularities": ["30s", "1min"],
     "feature_set": "candidate_b_non_target",
     "standardize_exogenous": true,
     "max_train_rows": 12000

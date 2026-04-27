@@ -1,0 +1,4 @@
+id_key,candidate,granularity,rows,columns,start_date,end_date
+subset_B_raw,subset_B,raw,86400,15,2022-03-27 14:28:54,2022-04-01 14:28:49
+subset_B_30s,subset_B,30s,14400,15,2022-03-27 14:29:24,2022-04-01 14:28:54
+subset_B_1min,subset_B,1min,7200,15,2022-03-27 14:29:54,2022-04-01 14:28:54

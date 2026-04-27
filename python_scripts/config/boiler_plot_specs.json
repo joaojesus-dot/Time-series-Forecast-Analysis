@@ -1,5 +1,6 @@
 {
   "smoothing_windows": {
+    "30s": 30,
     "1min": 60,
     "5min": 300
   },
@@ -15,15 +16,15 @@
     "differential_pressure": ["SXLTCYZ.AV_0#", "ZCLCCY.AV_0#"]
   },
   "assumed_plot_units": {
-    "target": "Temp (assumed C)",
-    "pressure_state": "Pressure (assumed native)",
-    "thermal_context": "Temp (assumed C)",
-    "steam_load_flow": "Steam flow (assumed t/h)",
-    "primary_fan_flow": "Air flow (assumed m3/h)",
-    "return_air_flow_left": "Air flow (assumed m3/h)",
-    "oxygen_state": "O2 (assumed %)",
-    "fan_condition": "Fan condition (native)",
-    "differential_pressure": "Delta P (assumed Pa/kPa)"
+    "target": "Temperature",
+    "pressure_state": "Pressure",
+    "thermal_context": "Temperature",
+    "steam_load_flow": "Steam flow",
+    "primary_fan_flow": "Air flow",
+    "return_air_flow_left": "Air flow",
+    "oxygen_state": "O2",
+    "fan_condition": "Fan condition",
+    "differential_pressure": "Differential pressure"
   },
   "plot_specs": [
     {
@@ -58,7 +59,7 @@
       "dataset_keys_ref": "subset_b_datasets",
       "target_column_ref": true,
       "title": "Candidate B Target By Granularity",
-      "ylabel": "Temp (assumed C)",
+      "ylabel": "Temperature",
       "output_path_ref": ["pre_forecasting_plots", "subset_B_target_granularity_comparison.png"]
     },
     {
@@ -74,6 +75,13 @@
       "frame": "smoothing_summary",
       "title": "Target Standard Deviation After Smoothing And Differencing",
       "output_path_ref": ["pre_forecasting_plots", "target_transform_std_summary.png"]
+    },
+    {
+      "kind": "target_transform_plots",
+      "transform_series_ref": true,
+      "output_dir_ref": "pre_forecasting_plots",
+      "target_ylabel": "Temperature",
+      "zoom_duration": "6h"
     }
   ]
 }

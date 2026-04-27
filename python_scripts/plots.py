@@ -11,6 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 
 
 sns.set_theme(style="whitegrid")
@@ -19,9 +20,7 @@ sns.set_theme(style="whitegrid")
 # ---------------------------------------------------------------------------
 # Spec-driven plotting
 # ---------------------------------------------------------------------------
-# Plot specs describe what should be drawn. This module owns how each plot type
-# is rendered. Keeping plot intent in JSON makes it easier to change the
-# presentation layer without touching analysis code.
+# Render the configured plot specifications into image files.
 
 def write_plot_specs(plot_specs: list[dict[str, Any]], frames: dict[str, pd.DataFrame]) -> None:
     handlers = {
@@ -41,9 +40,7 @@ def write_plot_specs(plot_specs: list[dict[str, Any]], frames: dict[str, pd.Data
 # ---------------------------------------------------------------------------
 # Time-series plots
 # ---------------------------------------------------------------------------
-# These functions visualize selected process signals over time. Grouped plots
-# are used only when the configuration says the variables share a meaningful
-# physical family or comparable interpretation.
+# Draw the configured time-series panels and grouped sensor plots.
 
 def _plot_time_series_groups(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
     frame = frames[str(spec["frame"])]
@@ -93,8 +90,11 @@ def _plot_target_granularity_comparison(spec: dict[str, Any], frames: dict[str, 
     dataset_keys = spec["dataset_keys"]
     target_column = str(spec["target_column"])
     timestamp_column = str(spec.get("timestamp_column", "date"))
-    fig, axes = plt.subplots(2, 2, figsize=(14, 8), sharey=True)
-    axes = axes.ravel()
+    plot_count = len(dataset_keys)
+    if plot_count == 0:
+        return
+    fig, axes = plt.subplots(plot_count, 1, figsize=(14, 3.5 * plot_count), sharey=True)
+    axes = list(axes) if plot_count > 1 else [axes]
 
     for axis, frame_key in zip(axes, dataset_keys):
         frame = frames[frame_key]
@@ -110,9 +110,7 @@ def _plot_target_granularity_comparison(spec: dict[str, Any], frames: dict[str, 
 # ---------------------------------------------------------------------------
 # Correlation and distribution plots
 # ---------------------------------------------------------------------------
-# Heatmaps and standardized boxplots are descriptive tools. Standardization is
-# applied only for cross-variable distribution comparison because raw units are
-# not comparable across pressure, temperature, oxygen, flow, and fan signals.
+# Draw the exploratory correlation heatmap used in the pre-forecasting review.
 
 def _plot_heatmap_from_spec(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
     frame = frames[str(spec["frame"])]
@@ -131,41 +129,10 @@ def _plot_heatmap_from_spec(spec: dict[str, Any], frames: dict[str, pd.DataFrame
     _save_figure(fig, Path(spec["output_path"]))
 
 
-def _plot_hist_grid_by_dataset(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
-    dataset_keys = spec["dataset_keys"]
-    target_column = str(spec["target_column"])
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    axes = axes.ravel()
-
-    for axis, frame_key in zip(axes, dataset_keys):
-        axis.hist(frames[frame_key][target_column].dropna(), bins=50, color="#2f6f8f", alpha=0.85)
-        axis.set_title(frame_key.replace("subset_B_", ""))
-        axis.set_xlabel(spec.get("xlabel", "Value"))
-        axis.set_ylabel("Frequency")
-
-    fig.suptitle(spec["title"])
-    _save_figure(fig, Path(spec["output_path"]))
-
-
-def _plot_standardized_boxplots(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
-    output_dir = Path(spec["output_dir"])
-    timestamp_column = str(spec.get("timestamp_column", "date"))
-
-    for frame_key in spec["dataset_keys"]:
-        frame = frames[frame_key].drop(columns=timestamp_column)
-        standardized = (frame - frame.mean()) / frame.std()
-        fig, axis = plt.subplots(figsize=(14, 6))
-        standardized.boxplot(ax=axis, showfliers=False, rot=75)
-        axis.set_title(f"{frame_key} - Standardized Variable Distribution")
-        axis.set_ylabel("Z-score")
-        _save_figure(fig, output_dir / f"{frame_key}_standardized_boxplot.png")
-
-
 # ---------------------------------------------------------------------------
 # Target preprocessing plots
 # ---------------------------------------------------------------------------
-# Smoothing and first-difference plots are generated from cached transform
-# series. This keeps the plotted values aligned with the statistical summaries.
+# Draw the cached target transforms used in the preparation review.
 
 def _plot_target_transform_plots(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
     del frames
@@ -180,6 +147,7 @@ def _plot_target_transform_plots(spec: dict[str, Any], frames: dict[str, pd.Data
         original = next(record for record in records if record["transform"] == "original")
         smoothed = [record for record in records if record["transform"] == "trailing_rolling_mean"]
         first_difference = next(record for record in records if record["transform"] == "first_difference")
+        second_difference = next(record for record in records if record["transform"] == "second_difference")
 
         _plot_smoothing_comparison(
             id_key,
@@ -190,6 +158,7 @@ def _plot_target_transform_plots(spec: dict[str, Any], frames: dict[str, pd.Data
             str(spec.get("zoom_duration", "6h")),
         )
         _plot_first_difference(id_key, first_difference, output_dir)
+        _plot_difference_comparison(id_key, original, first_difference, second_difference, output_dir)
 
 
 def _plot_smoothing_std_summary(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
@@ -286,6 +255,36 @@ def _plot_first_difference(id_key: str, first_difference: dict[str, Any], output
     _save_figure(fig, output_dir / f"{id_key}_target_first_difference.png")
 
 
+def _plot_difference_comparison(
+    id_key: str,
+    original: dict[str, Any],
+    first_difference: dict[str, Any],
+    second_difference: dict[str, Any],
+    output_dir: Path,
+) -> None:
+    original_dates = pd.to_datetime(original["dates"]).reset_index(drop=True)
+    original_values = pd.Series(original["values"]).reset_index(drop=True)
+    first_values = pd.Series(first_difference["values"]).reset_index(drop=True)
+    second_values = pd.Series(second_difference["values"]).reset_index(drop=True)
+
+    fig, axes = plt.subplots(3, 1, figsize=(14, 9), sharex=True)
+    axes[0].plot(original_dates, original_values, linewidth=0.9, color="#1f4b99")
+    axes[0].set_title(f"{id_key} - Original Target")
+    axes[0].set_ylabel("Target")
+
+    axes[1].plot(original_dates, first_values, linewidth=0.9, color="#4c72b0")
+    axes[1].axhline(0, color="#333333", linewidth=0.8)
+    axes[1].set_title("First Difference")
+    axes[1].set_ylabel("Delta 1")
+
+    axes[2].plot(original_dates, second_values, linewidth=0.9, color="#55a868")
+    axes[2].axhline(0, color="#333333", linewidth=0.8)
+    axes[2].set_title("Second Difference")
+    axes[2].set_xlabel("date")
+    axes[2].set_ylabel("Delta 2")
+    _save_figure(fig, output_dir / f"{id_key}_target_difference_comparison.png")
+
+
 def _build_smoothing_zoom_mask(
     dates: pd.Series,
     original_values: pd.Series,
@@ -319,58 +318,201 @@ def _steps_for_duration(dates: pd.Series, duration: str) -> int:
 # ---------------------------------------------------------------------------
 # Forecasting plots
 # ---------------------------------------------------------------------------
-# Forecasting modules pass already-evaluated forecast frames here. This keeps
-# model fitting separate from visual diagnostics.
+# Draw the forecasting comparison plots from the evaluated forecast frames.
 
-def write_forecast_plot(
-    id_key: str,
-    granularity: str,
-    train_frame: pd.DataFrame,
-    test_frame: pd.DataFrame,
-    forecast_frames: list[pd.DataFrame],
+def write_univariate_comparison_plots(
+    arima_metrics: pd.DataFrame,
+    mlp_metrics: pd.DataFrame,
+    arima_forecasts: pd.DataFrame,
+    mlp_forecasts: pd.DataFrame,
     output_dir: Path,
-    model_family: str,
 ) -> None:
-    fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
-    train_tail = train_frame.tail(min(len(train_frame), len(test_frame)))
-
-    axes[0].plot(train_tail["ds"], train_tail["y"], linewidth=0.9, color="#888888", label="train tail")
-    axes[0].plot(test_frame["ds"], test_frame["y"], linewidth=1.0, color="#222222", label="test actual")
-    for forecast_frame in forecast_frames:
-        axes[0].plot(
-            forecast_frame["ds"],
-            forecast_frame["forecast"],
-            linewidth=1.0,
-            label=str(forecast_frame["model"].iloc[0]),
-        )
-    axes[0].axvline(test_frame["ds"].iloc[0], color="#333333", linewidth=0.9, linestyle="--")
-    axes[0].set_title(f"{id_key} - 80/20 {model_family} Forecast")
-    axes[0].set_ylabel("Target")
-    axes[0].legend(loc="upper right", fontsize=8)
-
-    for forecast_frame in forecast_frames:
-        axes[1].plot(
-            forecast_frame["ds"],
-            forecast_frame["forecast"] - forecast_frame["y"],
-            linewidth=1.0,
-            label=str(forecast_frame["model"].iloc[0]),
-        )
-    axes[1].axhline(0, color="#333333", linewidth=0.8)
-    axes[1].set_title("Forecast Error")
-    axes[1].set_xlabel("date")
-    axes[1].set_ylabel("Forecast - actual")
-    axes[1].legend(loc="upper right", fontsize=8)
-    _save_figure(fig, output_dir / f"{id_key}_{model_family.lower()}_forecast.png")
+    """Write human-facing comparison plots for univariate model review."""
+    metric_frames = []
+    if not arima_metrics.empty:
+        metric_frames.append(arima_metrics.assign(model_family="ARIMA", split="test"))
+    if not mlp_metrics.empty and "split" in mlp_metrics.columns:
+        metric_frames.append(mlp_metrics[mlp_metrics["split"] == "test"].copy().assign(model_family="MLP"))
+    if metric_frames:
+        comparable_metrics = pd.concat(metric_frames, ignore_index=True)
+        write_univariate_metric_comparison(comparable_metrics, output_dir / "univariate_metric_comparison.png")
+    write_univariate_forecast_overlays(arima_forecasts, mlp_forecasts, output_dir)
 
 
-def write_forecast_metrics_plot(metrics: pd.DataFrame, output_path: Path) -> None:
+def write_univariate_metric_comparison(metrics: pd.DataFrame, output_path: Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     for axis, metric in zip(axes, ["mae", "rmse"]):
-        pivot = metrics.pivot(index="granularity", columns="model", values=metric)
-        pivot.plot(kind="bar", ax=axis)
+        sns.barplot(data=metrics, x="granularity", y=metric, hue="model_family", ax=axis)
         axis.set_title(metric.upper())
         axis.set_xlabel("Granularity")
         axis.set_ylabel(metric.upper())
+        axis.legend(loc="upper right", fontsize=8)
+    _save_figure(fig, output_path)
+
+
+def write_univariate_forecast_overlays(
+    arima_forecasts: pd.DataFrame,
+    mlp_forecasts: pd.DataFrame,
+    output_dir: Path,
+    max_points: int = 600,
+) -> None:
+    if mlp_forecasts.empty or "granularity" not in mlp_forecasts.columns or "split" not in mlp_forecasts.columns:
+        return
+    if arima_forecasts.empty or "granularity" not in arima_forecasts.columns:
+        return
+
+    for granularity in sorted(set(mlp_forecasts["granularity"].dropna())):
+        mlp_test = mlp_forecasts[
+            (mlp_forecasts["granularity"] == granularity) & (mlp_forecasts["split"] == "test")
+        ].copy()
+        arima_test = arima_forecasts[arima_forecasts["granularity"] == granularity].copy()
+        if mlp_test.empty or arima_test.empty:
+            continue
+
+        plot_dates = mlp_test["ds"].head(max_points)
+        arima_zoom = arima_test[arima_test["ds"].isin(plot_dates)]
+        mlp_zoom = mlp_test.head(max_points)
+
+        fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+        axes[0].plot(mlp_zoom["ds"], mlp_zoom["y"], color="#222222", linewidth=1.1, label="actual")
+        axes[0].plot(arima_zoom["ds"], arima_zoom["forecast"], linewidth=1.0, label="ARIMA")
+        axes[0].plot(mlp_zoom["ds"], mlp_zoom["forecast"], linewidth=1.0, label="MLP")
+        axes[0].set_title(f"{granularity} - Test Forecast Comparison")
+        axes[0].set_ylabel("Target")
+        axes[0].legend(loc="upper right", fontsize=8)
+
+        if not arima_zoom.empty:
+            axes[1].plot(arima_zoom["ds"], arima_zoom["forecast"] - arima_zoom["y"], linewidth=1.0, label="ARIMA")
+        axes[1].plot(mlp_zoom["ds"], mlp_zoom["forecast"] - mlp_zoom["y"], linewidth=1.0, label="MLP")
+        axes[1].axhline(0, color="#333333", linewidth=0.8)
+        axes[1].set_title("Forecast Error")
+        axes[1].set_xlabel("date")
+        axes[1].set_ylabel("Forecast - actual")
+        axes[1].legend(loc="upper right", fontsize=8)
+        _save_figure(fig, output_dir / f"{granularity}_univariate_forecast_overlay.png")
+
+
+def write_historical_model_metric_plots(history_frame: pd.DataFrame, output_dir: Path) -> None:
+    if history_frame.empty:
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    test_history = history_frame[history_frame["split"] == "test"].copy()
+    if test_history.empty:
+        return
+
+    write_historical_metric_leaderboard(test_history, output_dir / "historical_test_metric_leaderboard.png")
+    for model_key, model_frame in test_history.groupby("model_key"):
+        model_key_text = str(model_key)
+        write_model_history_plot(model_key_text, model_frame, output_dir / f"{model_key_text}_test_history.png")
+
+
+def write_historical_metric_leaderboard(history_frame: pd.DataFrame, output_path: Path) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    for axis, metric in zip(axes, ["mae", "rmse"]):
+        sns.barplot(
+            data=history_frame,
+            x="run_label",
+            y=metric,
+            hue="model_label",
+            ax=axis,
+        )
+        axis.set_title(f"Historical Test {metric.upper()} By Run")
+        axis.set_xlabel("Run")
+        axis.set_ylabel(metric.upper())
+        axis.tick_params(axis="x", rotation=45)
+        axis.legend(loc="upper right", fontsize=8)
+    _save_figure(fig, output_path)
+
+
+def write_target_profiling_plots(
+    datasets: dict[str, pd.DataFrame],
+    target_column: str,
+    output_dir: Path,
+    timestamp_column: str = "date",
+    max_lags: int = 120,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for id_key, dataset in datasets.items():
+        series = dataset[target_column].dropna().reset_index(drop=True)
+        if len(series) < 20:
+            continue
+        dates = pd.to_datetime(dataset[timestamp_column], errors="coerce").reset_index(drop=True)
+        rolling_window = max(5, min(len(series) // 10, 120))
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+        axes = axes.ravel()
+        axes[0].plot(dates, series, linewidth=0.9, color="#1f4b99")
+        axes[0].set_title(f"{id_key} - Target Over Time")
+        axes[0].set_xlabel(timestamp_column)
+        axes[0].set_ylabel(target_column)
+
+        rolling_mean = series.rolling(window=rolling_window, min_periods=rolling_window).mean()
+        rolling_std = series.rolling(window=rolling_window, min_periods=rolling_window).std()
+        axes[1].plot(dates, series, linewidth=0.8, alpha=0.45, label="target")
+        axes[1].plot(dates, rolling_mean, linewidth=1.1, label=f"rolling mean ({rolling_window})")
+        axes[1].plot(dates, rolling_std, linewidth=1.1, label=f"rolling std ({rolling_window})")
+        axes[1].set_title("Rolling Mean And Std")
+        axes[1].set_xlabel(timestamp_column)
+        axes[1].legend(loc="upper right", fontsize=8)
+
+        plot_acf(series, lags=min(max_lags, len(series) - 2), ax=axes[2], title="Autocorrelation")
+        plot_pacf(series, lags=min(max_lags, len(series) // 2 - 1, 60), ax=axes[3], title="Partial Autocorrelation", method="ywm")
+        _save_figure(fig, output_dir / f"{id_key}_target_profile.png")
+
+
+def write_target_correlation_barplots(
+    correlation_summary: pd.DataFrame,
+    output_dir: Path,
+    top_n: int = 8,
+) -> None:
+    if correlation_summary.empty:
+        return
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for granularity, frame in correlation_summary.groupby("granularity"):
+        top_frame = frame.sort_values("abs_correlation", ascending=False).head(top_n)
+        fig, axis = plt.subplots(figsize=(12, 5))
+        sns.barplot(data=top_frame, x="variable", y="correlation", ax=axis, color="#1f4b99")
+        axis.set_title(f"{granularity} - Top Target Correlations")
+        axis.set_xlabel("Variable")
+        axis.set_ylabel("Correlation With Target")
+        axis.tick_params(axis="x", rotation=60)
+        _save_figure(fig, output_dir / f"{granularity}_target_correlation_barplot.png")
+
+
+def write_preparation_selection_plots(
+    validation_results: pd.DataFrame,
+    output_dir: Path,
+) -> None:
+    if validation_results.empty:
+        return
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for granularity, frame in validation_results.groupby("granularity"):
+        ordered = frame.sort_values("validation_mae")
+        fig, axes = plt.subplots(1, 2, figsize=(16, 5))
+        sns.barplot(data=ordered, x="candidate_label", y="validation_mae", ax=axes[0], color="#1f4b99")
+        axes[0].set_title(f"{granularity} - Validation MAE By Preparation")
+        axes[0].set_xlabel("Preparation candidate")
+        axes[0].set_ylabel("Validation MAE")
+        axes[0].tick_params(axis="x", rotation=70)
+
+        sns.barplot(data=ordered, x="candidate_label", y="test_mae", ax=axes[1], color="#4c9a2a")
+        axes[1].set_title(f"{granularity} - Test MAE By Preparation")
+        axes[1].set_xlabel("Preparation candidate")
+        axes[1].set_ylabel("Test MAE")
+        axes[1].tick_params(axis="x", rotation=70)
+        _save_figure(fig, output_dir / f"{granularity}_preparation_selection.png")
+
+
+def write_model_history_plot(model_key: str, model_frame: pd.DataFrame, output_path: Path) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    ordered = model_frame.sort_values(["granularity", "run_created_at", "run_id"])
+    for axis, metric in zip(axes, ["mae", "rmse"]):
+        sns.barplot(data=ordered, x="run_label", y=metric, hue="granularity", ax=axis)
+        axis.set_title(f"{model_key} Test {metric.upper()} Across Runs")
+        axis.set_xlabel("Run")
+        axis.set_ylabel(metric.upper())
+        axis.tick_params(axis="x", rotation=45)
         axis.legend(loc="upper right", fontsize=8)
     _save_figure(fig, output_path)
 

@@ -2,8 +2,7 @@
   "granularity_options": {
     "raw": null,
     "30s": "30s",
-    "1min": "1min",
-    "5min": "5min"
+    "1min": "1min"
   },
   "resampling_policy": {
     "timestamp_column": "date",

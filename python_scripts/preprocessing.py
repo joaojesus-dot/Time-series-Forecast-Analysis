@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
+import numpy as np
 import pandas as pd
+
+
+class Scaler(TypedDict, total=False):
+    mean: float
+    std: float
+    min: float
+    max: float
+    range: float
+    method: str
+    scale: float
 
 
 SUPPORTED_AGGREGATIONS = {
@@ -190,6 +201,20 @@ def expected_rows_per_window(output_granularity: str, input_frequency: str) -> i
     return int(ratio)
 
 
+def steps_for_duration(duration: str, frequency: str) -> int:
+    """Convert a real-time duration into row steps for one sampling frequency."""
+    duration_delta = pd.Timedelta(duration)
+    frequency_delta = pd.Timedelta(frequency)
+    if frequency_delta <= pd.Timedelta(0):
+        raise ValueError("frequency must be positive.")
+    if duration_delta < frequency_delta:
+        raise ValueError(f"duration '{duration}' must be greater than or equal to frequency '{frequency}'.")
+    ratio = duration_delta / frequency_delta
+    if ratio != int(ratio):
+        raise ValueError(f"duration '{duration}' must be an integer multiple of frequency '{frequency}'.")
+    return int(ratio)
+
+
 # ---------------------------------------------------------------------------
 # Target transformations
 # ---------------------------------------------------------------------------
@@ -314,6 +339,28 @@ def split_train_test(frame: pd.DataFrame, train_fraction: float) -> tuple[pd.Dat
     return frame.iloc[:split_index].copy(), frame.iloc[split_index:].copy()
 
 
+def split_train_validation_test(
+    frame: pd.DataFrame,
+    train_fraction: float,
+    validation_fraction: float,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Chronologically split rows into model-train, validation, and final test sets."""
+    if not 0 < train_fraction < 1:
+        raise ValueError("train_fraction must be between 0 and 1.")
+    if validation_fraction < 0 or validation_fraction >= train_fraction:
+        raise ValueError("validation_fraction must be non-negative and smaller than train_fraction.")
+
+    train_end = int(len(frame) * (train_fraction - validation_fraction))
+    validation_end = int(len(frame) * train_fraction)
+    if train_end <= 0 or validation_end <= train_end or validation_end >= len(frame):
+        raise ValueError("Configured split fractions create an empty train, validation, or test set.")
+    return (
+        frame.iloc[:train_end].copy(),
+        frame.iloc[train_end:validation_end].copy(),
+        frame.iloc[validation_end:].copy(),
+    )
+
+
 def infer_exogenous_columns(dataset: pd.DataFrame, target_column: str, timestamp_column: str = "date") -> list[str]:
     excluded = {target_column, timestamp_column}
     return [
@@ -323,7 +370,7 @@ def infer_exogenous_columns(dataset: pd.DataFrame, target_column: str, timestamp
     ]
 
 
-def fit_standard_scaler(series: pd.Series) -> dict[str, float]:
+def fit_standard_scaler(series: pd.Series) -> Scaler:
     mean = float(series.mean())
     std = float(series.std(ddof=0))
     if pd.isna(std) or std == 0:
@@ -331,8 +378,51 @@ def fit_standard_scaler(series: pd.Series) -> dict[str, float]:
     return {"mean": mean, "std": std}
 
 
-def apply_standard_scaler(series: pd.Series, scaler: dict[str, float]) -> pd.Series:
-    return (series - scaler["mean"]) / scaler["std"]
+def fit_minmax_scaler(series: pd.Series) -> Scaler:
+    minimum = float(series.min())
+    maximum = float(series.max())
+    value_range = maximum - minimum
+    if pd.isna(value_range) or value_range == 0:
+        value_range = 1.0
+    return {"min": minimum, "max": maximum, "range": value_range}
+
+
+def fit_linear_scaler(series: pd.Series, method: str) -> Scaler:
+    if method == "standard":
+        scaler = fit_standard_scaler(series)
+        scaler["method"] = "standard"
+        scaler["scale"] = scaler["std"]
+        return scaler
+    if method == "minmax":
+        scaler = fit_minmax_scaler(series)
+        scaler["method"] = "minmax"
+        scaler["scale"] = scaler["range"]
+        return scaler
+    raise ValueError(f"Unsupported scaling method '{method}'.")
+
+
+def apply_standard_scaler(series: pd.Series, scaler: Scaler) -> pd.Series:
+    return (series - _require_float(scaler, "mean")) / _require_float(scaler, "std")
+
+
+def apply_minmax_scaler(series: pd.Series, scaler: Scaler) -> pd.Series:
+    return (series - _require_float(scaler, "min")) / _require_float(scaler, "range")
+
+
+def apply_linear_scaler(series: pd.Series, scaler: Scaler) -> pd.Series:
+    method = str(scaler["method"])
+    if method == "standard":
+        return apply_standard_scaler(series, scaler)
+    if method == "minmax":
+        return apply_minmax_scaler(series, scaler)
+    raise ValueError(f"Unsupported scaling method '{method}'.")
+
+
+def _require_float(scaler: Scaler, key: str) -> float:
+    value = scaler.get(key)
+    if not isinstance(value, (int, float)):
+        raise TypeError(f"Scaler entry '{key}' must be numeric.")
+    return float(value)
 
 
 def standardize_columns(
@@ -352,27 +442,44 @@ def standardize_columns(
 def build_scaled_target_frame(
     frame: pd.DataFrame,
     train_fraction: float,
+    validation_fraction: float,
     granularity: str,
     target_column: str,
+    frequency: str,
+    scaling_method: str = "standard",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    train_frame, test_frame = split_train_test(frame, train_fraction)
-    scaler = fit_standard_scaler(train_frame["y"])
+    train_frame, validation_frame, test_frame = split_train_validation_test(frame, train_fraction, validation_fraction)
+    scaler = fit_linear_scaler(train_frame["y"], scaling_method)
 
-    scaled_frame = pd.concat([train_frame.assign(split="train"), test_frame.assign(split="test")], ignore_index=True)
-    scaled_frame["y_scaled"] = apply_standard_scaler(scaled_frame["y"], scaler)
+    scaled_frame = pd.concat(
+        [
+            train_frame.assign(split="train"),
+            validation_frame.assign(split="validation"),
+            test_frame.assign(split="test"),
+        ],
+        ignore_index=True,
+    )
+    scaled_frame["y_scaled"] = apply_linear_scaler(scaled_frame["y"], scaler)
     scaling_summary = pd.DataFrame(
         [
             {
                 "granularity": granularity,
+                "frequency": frequency,
                 "target_column": target_column,
-                "scaler": "standard",
+                "scaler": scaling_method,
                 "fit_split": "train",
                 "train_rows": len(train_frame),
+                "validation_rows": len(validation_frame),
                 "test_rows": len(test_frame),
-                "train_mean": scaler["mean"],
-                "train_std": scaler["std"],
+                "train_mean": scaler.get("mean", np.nan),
+                "train_std": scaler.get("std", np.nan),
+                "train_min": scaler.get("min"),
+                "train_max": scaler.get("max"),
+                "train_scale": scaler["scale"],
                 "train_start": train_frame["ds"].iloc[0],
                 "train_end": train_frame["ds"].iloc[-1],
+                "validation_start": validation_frame["ds"].iloc[0],
+                "validation_end": validation_frame["ds"].iloc[-1],
                 "test_start": test_frame["ds"].iloc[0],
                 "test_end": test_frame["ds"].iloc[-1],
             }

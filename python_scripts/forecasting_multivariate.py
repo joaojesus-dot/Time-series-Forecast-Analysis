@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 from statsforecast import StatsForecast
@@ -10,7 +10,6 @@ from statsforecast.models import ARIMA
 
 try:
     from exploration import build_forecast_metric_row
-    from plots import write_forecast_metrics_plot, write_forecast_plot
     from preprocessing import (
         build_forecasting_frame,
         infer_exogenous_columns,
@@ -18,10 +17,8 @@ try:
         standardize_columns,
         statsforecast_frequency,
     )
-    from reports import write_arimax_report
 except ImportError:  # pragma: no cover - package import path
     from .exploration import build_forecast_metric_row
-    from .plots import write_forecast_metrics_plot, write_forecast_plot
     from .preprocessing import (
         build_forecasting_frame,
         infer_exogenous_columns,
@@ -29,7 +26,6 @@ except ImportError:  # pragma: no cover - package import path
         standardize_columns,
         statsforecast_frequency,
     )
-    from .reports import write_arimax_report
 
 
 def run_multivariate_analysis(
@@ -51,7 +47,7 @@ def run_multivariate_analysis(
     return run_arimax_forecasts(
         datasets=datasets,
         target_column=target_column,
-        target_granularities=analysis_policy.get("target_granularities", ["30s", "1min", "5min"]),
+        target_granularities=analysis_policy.get("target_granularities", ["30s", "1min"]),
         granularity_options=granularity_options,
         resampling_policy=resampling_policy,
         forecasting_policy=forecasting_policy,
@@ -80,12 +76,11 @@ def run_arimax_forecasts(
     forecast_frames = []
     metric_rows = []
     skipped_rows = []
-    arima_config = forecasting_policy["arima"]
+    arima_config = forecasting_policy.get("univariate", {}).get("arima", forecasting_policy.get("arima", {}))
     p_value, d_value, q_value = parse_arima_order(arima_config)
+    train_fraction = protocol_train_test_boundary(forecasting_policy)
     max_train_rows = int(analysis_policy.get("max_train_rows", 12_000))
     write_full_forecasts = bool(forecasting_policy.get("write_full_forecasts", False))
-    write_forecast_plots = bool(forecasting_policy.get("write_forecast_plots", True))
-
     for granularity in target_granularities:
         id_key = f"subset_B_{granularity}"
         if id_key not in datasets:
@@ -99,7 +94,7 @@ def run_arimax_forecasts(
             timestamp_column,
             exogenous_columns=exogenous_columns,
         )
-        train_frame, test_frame = split_train_test(series_frame, float(forecasting_policy["train_fraction"]))
+        train_frame, test_frame = split_train_test(series_frame, train_fraction)
         if len(train_frame) > max_train_rows:
             skipped_rows.append(
                 {
@@ -115,8 +110,6 @@ def run_arimax_forecasts(
         if bool(analysis_policy.get("standardize_exogenous", True)):
             train_frame, test_frame = standardize_columns(train_frame, test_frame, exogenous_columns)
         frequency = statsforecast_frequency(granularity, granularity_options, resampling_policy)
-        granularity_forecasts = []
-
         model_alias = f"ARIMAX_p{p_value}_d{d_value}_q{q_value}"
         forecast_frame = forecast_arimax(
             train_frame=train_frame,
@@ -142,18 +135,20 @@ def run_arimax_forecasts(
             exogenous_count=len(exogenous_columns),
         )
         forecast_frames.append(forecast_frame)
-        granularity_forecasts.append(forecast_frame)
         metric_rows.append(build_forecast_metric_row(forecast_frame, exogenous_columns=exogenous_columns))
 
-        if write_forecast_plots:
-            write_forecast_plot(id_key, granularity, train_frame, test_frame, granularity_forecasts, plots_dir, "ARIMAX")
-
-    forecasts = pd.concat(forecast_frames, ignore_index=True)
-    metrics = pd.DataFrame(metric_rows).sort_values(["granularity", "d"])
+    forecasts = (
+        pd.concat(forecast_frames, ignore_index=True)
+        if forecast_frames
+        else pd.DataFrame(columns=["ds", "y", "forecast"])
+    )
+    metrics = (
+        pd.DataFrame(metric_rows).sort_values(["granularity", "d"])
+        if metric_rows
+        else pd.DataFrame(columns=["granularity", "model", "mae", "rmse"])
+    )
     if write_full_forecasts:
         write_csv_output(forecasts, output_dir / "arimax_forecasts.csv")
-    write_forecast_metrics_plot(metrics, plots_dir / "arimax_metric_comparison.png")
-    write_arimax_report(metrics, skipped_rows, reports_dir / "arimax_forecasting.md", (p_value, d_value, q_value))
     return {"forecasts": forecasts, "metrics": metrics, "skipped": pd.DataFrame(skipped_rows)}
 
 
@@ -169,10 +164,13 @@ def forecast_arimax(
     exogenous_columns: list[str],
 ) -> pd.DataFrame:
     """Fit one fixed-order ARIMAX using known test-period exogenous values."""
+    seasonal_order = tuple(
+        int(value) for value in cast(list[int] | tuple[int, int, int], arima_config.get("seasonal_order", [0, 0, 0]))
+    )
     model = ARIMA(
         order=(p_value, d_value, q_value),
         season_length=int(arima_config.get("season_length", 1)),
-        seasonal_order=tuple(int(value) for value in arima_config.get("seasonal_order", [0, 0, 0])),
+        seasonal_order=seasonal_order,
         include_mean=d_value == 0,
         include_drift=d_value == 1,
         method=str(arima_config.get("method", "CSS-ML")),
@@ -198,10 +196,19 @@ def forecast_arimax(
 
 def parse_arima_order(arima_config: dict[str, Any]) -> tuple[int, int, int]:
     """Return the active ARIMA `(p, d, q)` order from forecasting config."""
-    order = arima_config.get("order", [1, 0, 1])
+    order = cast(list[int] | tuple[int, int, int], arima_config.get("order", [1, 0, 1]))
     if len(order) != 3:
         raise ValueError("arima.order must contain exactly three values: [p, d, q].")
-    return tuple(int(value) for value in order)
+    return int(order[0]), int(order[1]), int(order[2])
+
+
+def protocol_train_test_boundary(forecasting_policy: dict[str, Any]) -> float:
+    """Return the train+validation boundary used for final holdout evaluation."""
+    protocol = forecasting_policy.get("experimental_protocol", {})
+    splits = protocol.get("splits", {})
+    if splits:
+        return float(splits["train"]) + float(splits["validation"])
+    return float(forecasting_policy.get("train_fraction", 0.8))
 
 
 def add_forecast_metadata(
