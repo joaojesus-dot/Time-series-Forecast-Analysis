@@ -2,7 +2,7 @@
 
 ## Scope
 - Dataset: Chinese boiler process monitoring data.
-- Repaired working dataset: `data/chinese_boiler_dataset/derived/boiler_repaired.csv`.
+- Repaired working dataset: `C:/Users/joaoj/Time-series Forecast Analysis/data/chinese_boiler_dataset/derived/boiler_repaired.csv`.
 - Forecast target: `TE_8313B.AV_0#`.
 
 ## Reduced Feature Sets

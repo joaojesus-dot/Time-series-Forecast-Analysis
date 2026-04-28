@@ -1,7 +1,0 @@
-model_key,model_label,split,granularity,mae,rmse,mape,smape,bias,configuration,mae_rank
-univariate_mlp_target_lags,Univariate MLP Target Lags,test,1min,2.136909542651629,2.6930024969565394,0.27465110523235614,0.27463913867301787,0.02725011479444564,first_difference | smooth=1min | lr=0.01,1.0
-univariate_arima,Univariate ARIMA,test,1min,8.287252293247112,10.445608117097441,1.0591782760782908,1.0652083405376864,-4.518492508720375,"ARIMA(1,0,1)",2.0
-univariate_mlp_target_lags,Univariate MLP Target Lags,test,30s,1.2308213144615572,1.5538613797596919,0.15814040404007657,0.1581374855991261,0.0031961668436408974,first_difference | smooth=30s | lr=0.01,1.0
-univariate_arima,Univariate ARIMA,test,30s,8.279751440302949,10.434647823935288,1.0582428611432693,1.0642431718783123,-4.500693705995859,"ARIMA(1,0,1)",2.0
-univariate_mlp_target_lags,Univariate MLP Target Lags,validation,1min,2.031799419498208,2.5760671780332443,0.26392395287380627,0.2639429565386179,-0.009806050738382267,first_difference | smooth=1min | lr=0.01,1.0
-univariate_mlp_target_lags,Univariate MLP Target Lags,validation,30s,1.2283928073528299,1.5496610661351558,0.15961291138555497,0.15962166865566804,-0.009356546229603784,first_difference | smooth=30s | lr=0.01,1.0

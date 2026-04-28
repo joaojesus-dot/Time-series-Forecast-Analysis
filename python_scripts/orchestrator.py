@@ -234,13 +234,13 @@ def main() -> int:
         stationarity_summary=stationarity_summary,
         correlation_summary=correlation_summary,
     )
-    write_experiment_plan(
-        output_path=forecasting_reports_output / "experiment_plan.md",
-        target_column=target_column,
-        forecasting_policy=forecasting_config,
-        resampling_policy=resampling_policy,
-    )
     if not args.skip_forecasting:
+        write_experiment_plan(
+            output_path=forecasting_reports_output / "experiment_plan.md",
+            target_column=target_column,
+            forecasting_policy=forecasting_config,
+            resampling_policy=resampling_policy,
+        )
         run_metadata = build_run_metadata(forecasting_config)
         forecasting_results = run_forecasting_pipeline(
             datasets=subset_b_datasets,

@@ -74,6 +74,7 @@ def write_experiment_plan(
     target_granularities = ", ".join(f"`{value}`" for value in protocol["target_granularities"])
     difference_orders = ", ".join(str(value) for value in protocol.get("differentiation_orders", []))
     smoothing_windows = ", ".join(f"`{value}`" for value in protocol.get("train_only_smoothing_windows", []))
+    smoothing_by_granularity = protocol.get("train_only_smoothing_windows_by_granularity", {})
     mlp_config = forecasting_policy.get("univariate", {}).get("mlp", {})
     lines = [
         "# Experiment Plan",
@@ -85,27 +86,29 @@ def write_experiment_plan(
         "",
         "## Chronological Splits",
         f"- Train: `{float(splits['train']):.0%}` of rows.",
-        f"- Validation: `{float(splits['validation']):.0%}` of rows.",
         f"- Test: `{float(splits['test']):.0%}` of rows.",
-        "- Validation and test remain strictly after train in time order.",
+        "- Test remains strictly after train in time order.",
         "",
         "## Preparation Candidates",
         f"- Scaling method: `{protocol['scaling']['method']}` fitted on train only.",
         f"- Differentiation orders tested: `{difference_orders}`.",
-        f"- Train-only smoothing windows tested: {smoothing_windows}.",
-        "- Candidate recommendation is ranked by validation metrics before test comparison.",
+        f"- Default train-only smoothing windows tested: {smoothing_windows}.",
+        f"- Per-granularity smoothing windows: `{json.dumps(smoothing_by_granularity)}`.",
+        "- Test forecasts are written for every candidate for manual visual and metric comparison.",
         "",
         "## MLP Rules",
         f"- Lookback window: `{protocol['lookback_window']}`.",
         f"- Forecast horizon: `{protocol['forecast_horizon']}`.",
         "- Input features: target lags only.",
         "- Hidden architecture: single hidden layer.",
+        f"- Engine: `{mlp_config.get('engine', 'neuralforecast')}`.",
         f"- Activation: `{mlp_config.get('activation', 'relu')}`.",
-        f"- Solver: `{mlp_config.get('solver', 'sgd')}`.",
-        f"- Learning-rate policy: `{mlp_config.get('learning_rate', 'adaptive')}`.",
-        f"- Initial learning-rate grid: `{json.dumps(mlp_config.get('initial_learning_rate_grid', []))}`.",
-        f"- Max iterations: `{mlp_config.get('max_iter', 5000)}`.",
-        f"- Recommendation mode: `{mlp_config.get('selection_mode', 'validation_recommendation')}`.",
+        f"- Optimizer: `{mlp_config.get('optimizer', 'adam')}`.",
+        f"- Learning-rate grid: `{json.dumps(mlp_config.get('learning_rate_grid', []))}`.",
+        f"- Minimum training steps: `{mlp_config.get('min_steps', 5000)}`.",
+        f"- Maximum training steps: `{mlp_config.get('max_steps', 7500)}`.",
+        f"- Accelerator: `{mlp_config.get('accelerator', 'auto')}`.",
+        f"- Comparison mode: `{mlp_config.get('selection_mode', 'test_comparison')}`.",
     ]
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -264,7 +267,7 @@ def build_data_preparation_markdown(
             "",
             "## Scaling",
             f"- Active scaling method: `{scaling_method}`.",
-            "- Scaling is fitted on train only so validation and test remain unseen during preprocessing.",
+            "- Scaling is fitted on train only so test remains unseen during preprocessing.",
             "- A linear scaler is used so fitted forecasts can be converted back to the original target scale.",
             "",
             "## Aggregation Levels",
@@ -328,6 +331,7 @@ def build_forecasting_comparison_frame(
                 "mape": row["mape"],
                 "smape": row["smape"],
                 "bias": row["bias"],
+                "r2": row.get("r2"),
                 "configuration": f"ARIMA({row['p']},{row['d']},{row['q']})",
             }
         )
@@ -343,6 +347,7 @@ def build_forecasting_comparison_frame(
                 "mape": row["mape"],
                 "smape": row["smape"],
                 "bias": row["bias"],
+                "r2": row.get("r2"),
                 "configuration": (
                     f"{row['transform_name']} | smooth={row['training_smoothing_window']} | "
                     f"lr={row['learning_rate_init']}"
@@ -391,18 +396,22 @@ def collect_forecasting_model_specs(
                 "metrics": mlp_metrics,
                 "sections": [
                     {
-                        "title": "Preparation Candidate Ranking",
+                        "title": "Test Comparison Metrics",
                         "body": dataframe_to_markdown(
-                            univariate_results.get("mlp_preparation_selection", pd.DataFrame()),
+                            univariate_results.get("mlp_test_comparison", pd.DataFrame()),
                             [
+                                "split",
                                 "granularity",
                                 "candidate_label",
                                 "selection_mode",
                                 "difference_order",
                                 "training_smoothing_window",
                                 "learning_rate_init",
-                                "validation_mae",
-                                "test_mae",
+                                "min_steps",
+                                "max_steps",
+                                "mae",
+                                "rmse",
+                                "r2",
                             ],
                         ),
                     },
@@ -415,10 +424,13 @@ def collect_forecasting_model_specs(
                                 "candidate_label",
                                 "hidden_units",
                                 "learning_rate_init",
-                                "validation_mae",
-                                "validation_rmse",
-                                "test_mae",
-                                "test_rmse",
+                                "engine",
+                                "accelerator",
+                                "min_steps",
+                                "max_steps",
+                                "mae",
+                                "rmse",
+                                "r2",
                             ],
                         ),
                     },
@@ -432,7 +444,6 @@ def collect_forecasting_model_specs(
                                 "transform_name",
                                 "training_smoothing_window",
                                 "train_windows",
-                                "validation_windows",
                                 "test_windows",
                             ],
                         ),
@@ -465,7 +476,7 @@ def build_forecasting_overview_markdown(
             dataframe_to_markdown(catalog_frame, ["model_label", "status", "granularity_count", "report_path"]),
             "",
             "## Reported Results By Split And Granularity",
-            dataframe_to_markdown(best_rows, ["split", "granularity", "model_label", "mae", "rmse", "configuration"]),
+            dataframe_to_markdown(best_rows, ["split", "granularity", "model_label", "mae", "rmse", "r2", "configuration"]),
         ]
     )
 
@@ -488,6 +499,7 @@ def build_model_comparison_markdown(comparison_frame: pd.DataFrame) -> str:
                     "mape",
                     "smape",
                     "bias",
+                    "r2",
                     "configuration",
                 ],
             ),
@@ -507,13 +519,15 @@ def build_model_report_markdown(spec: dict[str, Any]) -> str:
             "mape",
             "smape",
             "bias",
-            "selection_basis",
+            "r2",
             "transform_name",
             "training_smoothing_window",
             "learning_rate_init",
+            "min_steps",
+            "max_steps",
         ]
     if "p" in metrics.columns:
-        metric_columns = ["granularity", "p", "d", "q", "mae", "rmse", "mape", "smape", "bias"]
+        metric_columns = ["granularity", "p", "d", "q", "mae", "rmse", "mape", "smape", "bias", "r2"]
 
     lines = [
         f"# {spec['model_label']}",
@@ -536,10 +550,10 @@ def build_model_report_markdown(spec: dict[str, Any]) -> str:
 
 def summarize_best_results(comparison_frame: pd.DataFrame) -> pd.DataFrame:
     if comparison_frame.empty:
-        return pd.DataFrame(columns=["split", "granularity", "model_label", "mae", "rmse", "configuration"])
+        return pd.DataFrame(columns=["split", "granularity", "model_label", "mae", "rmse", "r2", "configuration"])
     ordered = comparison_frame.sort_values(["split", "granularity", "mae", "rmse", "model_label"])
     return ordered.groupby(["split", "granularity"], as_index=False).first()[
-        ["split", "granularity", "model_label", "mae", "rmse", "configuration"]
+        ["split", "granularity", "model_label", "mae", "rmse", "r2", "configuration"]
     ]
 
 

@@ -20,8 +20,9 @@
 - `experimental_protocol.lookback_window`: history length used to build lag windows for MLP.
 - `experimental_protocol.profiling_granularities`: datasets included in autocorrelation and stationarity profiling.
 - `experimental_protocol.differentiation_orders`: difference orders evaluated during MLP preparation.
-- `experimental_protocol.train_only_smoothing_windows`: smoothing windows applied to the MLP train split only.
-- `experimental_protocol.splits`: chronological train, validation, and test fractions.
+- `experimental_protocol.train_only_smoothing_windows`: default smoothing windows applied to the MLP train split only.
+- `experimental_protocol.train_only_smoothing_windows_by_granularity`: per-granularity smoothing windows applied to the MLP train split only.
+- `experimental_protocol.splits`: chronological train and test fractions.
 - `experimental_protocol.scaling.method`: target scaling method fitted on the train split.
 - `experimental_protocol.metrics`: metrics written to the comparison tables.
 - `experimental_protocol.supervised_window.input`: lag-window feature source for the MLP.
@@ -45,14 +46,20 @@
 ## `univariate.mlp`
 
 - `enabled`: toggles univariate MLP execution.
+- `engine`: forecasting backend; currently `neuralforecast`.
 - `hidden_units_strategy`: chooses how the hidden-layer width is derived.
-- `activation`: hidden-layer activation function.
-- `solver`: optimizer used by `MLPRegressor`.
-- `learning_rate`: learning-rate schedule used by `MLPRegressor`.
-- `initial_learning_rate_grid`: starting learning rates evaluated for each preparation candidate.
-- `max_iter`: training iteration cap.
-- `random_state`: reproducibility seed passed to `MLPRegressor`.
-- `selection_mode`: label used in reports for the current candidate recommendation strategy.
+- `activation`: hidden-layer activation function; NeuralForecast MLP uses ReLU internally.
+- `optimizer`: optimizer label used for reporting; NeuralForecast MLP defaults to Adam.
+- `learning_rate_grid`: learning rates evaluated for each preparation candidate.
+- `min_steps`: minimum training steps required by the assignment rule.
+- `max_steps`: training step cap used after the minimum has been satisfied.
+- `num_layers`: hidden-layer count; `1` follows the assignment's single-hidden-layer MLP.
+- `batch_size`: series batch size passed to NeuralForecast.
+- `windows_batch_size`: supervised-window batch size passed to NeuralForecast.
+- `accelerator`: Lightning accelerator used by NeuralForecast, for example `gpu` or `cpu`.
+- `devices`: number of accelerator devices requested.
+- `random_state`: reproducibility seed passed to NeuralForecast MLP.
+- `selection_mode`: label used in reports for the current candidate comparison strategy.
 - `write_window_data`: reserved switch for writing raw window matrices in future revisions.
 
 ## `multivariate`

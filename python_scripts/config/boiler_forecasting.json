@@ -1,22 +1,26 @@
 {
   "experimental_protocol": {
     "dataset_prefix": "subset_B",
-    "target_granularities": ["30s", "1min"],
-    "forecast_horizon": "10min",
+    "target_granularities": ["raw", "30s", "1min"],
+    "forecast_horizon": "1step",
     "lookback_window": "10min",
     "profiling_granularities": ["raw", "30s", "1min"],
     "differentiation_orders": [0, 1, 2],
-    "train_only_smoothing_windows": ["none", "30s", "1min"],
+    "train_only_smoothing_windows": ["none"],
+    "train_only_smoothing_windows_by_granularity": {
+      "raw": ["none", "30s"],
+      "30s": ["none", "1min"],
+      "1min": ["none", "2min"]
+    },
     "splits": {
-      "train": 0.7,
-      "validation": 0.1,
+      "train": 0.8,
       "test": 0.2
     },
     "scaling": {
       "method": "minmax",
       "fit_split": "train"
     },
-    "metrics": ["mae", "rmse", "mape", "smape", "bias"],
+    "metrics": ["mae", "rmse", "mape", "smape", "bias", "r2"],
     "supervised_window": {
       "input": "target_lags_only",
       "target": "value_at_forecast_horizon",
@@ -26,7 +30,7 @@
   "write_full_forecasts": false,
   "write_forecast_plots": true,
   "run_tracking": {
-    "enabled": true,
+    "enabled": false,
     "tag": "baseline",
     "history_root": "history",
     "copy_plots": true
@@ -35,7 +39,7 @@
     "enabled": true,
     "scale_target": true,
     "arima": {
-      "enabled": true,
+      "enabled": false,
       "order": [1, 0, 1],
       "season_length": 1,
       "seasonal_order": [0, 0, 0],
@@ -43,14 +47,20 @@
     },
     "mlp": {
       "enabled": true,
+      "engine": "neuralforecast",
       "hidden_units_strategy": "match_lookback",
       "activation": "relu",
-      "solver": "sgd",
-      "learning_rate": "adaptive",
-      "initial_learning_rate_grid": [0.001, 0.005, 0.01],
-      "max_iter": 5000,
+      "optimizer": "adam",
+      "learning_rate_grid": [0.0001, 0.001, 0.005, 0.01],
+      "min_steps": 5000,
+      "max_steps": 7500,
+      "num_layers": 1,
+      "batch_size": 1,
+      "windows_batch_size": 1024,
+      "accelerator": "gpu",
+      "devices": 1,
       "random_state": 42,
-      "selection_mode": "validation_recommendation",
+      "selection_mode": "test_comparison",
       "write_window_data": false
     }
   },

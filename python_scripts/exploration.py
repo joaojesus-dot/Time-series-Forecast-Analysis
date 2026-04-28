@@ -119,12 +119,16 @@ def forecast_metrics(actual: pd.Series, forecast: pd.Series) -> dict[str, float]
     abs_errors = errors.abs()
     nonzero_actual = actual.replace(0, np.nan)
     denominator = (actual.abs() + forecast.abs()).replace(0, np.nan)
+    total_sum_squares = np.square(actual - actual.mean()).sum()
+    residual_sum_squares = np.square(errors).sum()
+    r2 = np.nan if total_sum_squares == 0 else 1 - residual_sum_squares / total_sum_squares
     return {
         "mae": float(abs_errors.mean()),
         "rmse": float(np.sqrt(np.mean(np.square(errors)))),
         "mape": float((abs_errors / nonzero_actual.abs()).mean() * 100),
         "smape": float((2 * abs_errors / denominator).mean() * 100),
         "bias": float(errors.mean()),
+        "r2": float(r2),
     }
 
 
@@ -161,10 +165,8 @@ def build_mlp_window_summary(
     horizon_duration: str,
 ) -> pd.DataFrame:
     train_rows = int((scaled_frame["split"] == "train").sum())
-    validation_rows = int((scaled_frame["split"] == "validation").sum())
     test_rows = int((scaled_frame["split"] == "test").sum())
     train_windows = max(0, train_rows - lookback_steps - horizon_steps + 1)
-    validation_windows = max(0, validation_rows - lookback_steps - horizon_steps + 1)
     test_windows = max(0, test_rows - lookback_steps - horizon_steps + 1)
     return pd.DataFrame(
         [
@@ -180,10 +182,8 @@ def build_mlp_window_summary(
                 "lookback_duration": lookback_duration,
                 "horizon_duration": horizon_duration,
                 "train_rows": train_rows,
-                "validation_rows": validation_rows,
                 "test_rows": test_rows,
                 "train_windows": train_windows,
-                "validation_windows": validation_windows,
                 "test_windows": test_windows,
                 "write_window_data": False,
             }

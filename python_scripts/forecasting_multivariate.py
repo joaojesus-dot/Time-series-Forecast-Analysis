@@ -203,11 +203,11 @@ def parse_arima_order(arima_config: dict[str, Any]) -> tuple[int, int, int]:
 
 
 def protocol_train_test_boundary(forecasting_policy: dict[str, Any]) -> float:
-    """Return the train+validation boundary used for final holdout evaluation."""
+    """Return the chronological train/test boundary used for holdout evaluation."""
     protocol = forecasting_policy.get("experimental_protocol", {})
     splits = protocol.get("splits", {})
     if splits:
-        return float(splits["train"]) + float(splits["validation"])
+        return float(splits["train"])
     return float(forecasting_policy.get("train_fraction", 0.8))
 
 

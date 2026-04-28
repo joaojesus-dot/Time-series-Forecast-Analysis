@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, TypedDict, cast
 
 import numpy as np
 import pandas as pd
-from sklearn.neural_network import MLPRegressor
+from neuralforecast import NeuralForecast
+from neuralforecast.models import MLP as NeuralForecastMLP
 from statsforecast import StatsForecast
 from statsforecast.models import ARIMA
 
 try:
     from exploration import build_forecast_metric_row, forecast_metrics
-    from plots import write_preparation_selection_plots, write_univariate_comparison_plots
+    from plots import write_test_comparison_metric_plots, write_test_comparison_plots, write_univariate_comparison_plots
     from preprocessing import (
         build_forecasting_frame,
         build_scaled_target_frame,
@@ -22,7 +23,7 @@ try:
     )
 except ImportError:  # pragma: no cover - package import path
     from .exploration import build_forecast_metric_row, forecast_metrics
-    from .plots import write_preparation_selection_plots, write_univariate_comparison_plots
+    from .plots import write_test_comparison_metric_plots, write_test_comparison_plots, write_univariate_comparison_plots
     from .preprocessing import (
         build_forecasting_frame,
         build_scaled_target_frame,
@@ -62,19 +63,26 @@ def run_univariate_analysis(
     protocol = forecasting_policy["experimental_protocol"]
     target_granularities = list(protocol["target_granularities"])
 
-    arima_results = run_univariate_arima_forecasts(
-        datasets=datasets,
-        target_column=target_column,
-        target_granularities=target_granularities,
-        granularity_options=granularity_options,
-        resampling_policy=resampling_policy,
-        forecasting_policy=forecasting_policy,
-        protocol=protocol,
-        output_dir=output_dir,
-        reports_dir=reports_dir,
-        plots_dir=plots_dir,
-        timestamp_column=timestamp_column,
-    )
+    arima_config = analysis_policy.get("arima", {})
+    if bool(arima_config.get("enabled", False)):
+        arima_results = run_univariate_arima_forecasts(
+            datasets=datasets,
+            target_column=target_column,
+            target_granularities=target_granularities,
+            granularity_options=granularity_options,
+            resampling_policy=resampling_policy,
+            forecasting_policy=forecasting_policy,
+            protocol=protocol,
+            output_dir=output_dir,
+            reports_dir=reports_dir,
+            plots_dir=plots_dir,
+            timestamp_column=timestamp_column,
+        )
+    else:
+        arima_results = {
+            "forecasts": pd.DataFrame(columns=["ds", "y", "forecast", "granularity"]),
+            "metrics": pd.DataFrame(columns=["granularity", "model", "mae", "rmse", "r2"]),
+        }
 
     candidate_specs, scaling_summary, mlp_window_summary = build_mlp_preparation_candidates(
         datasets=datasets,
@@ -86,16 +94,20 @@ def run_univariate_analysis(
         timestamp_column=timestamp_column,
     )
 
-    mlp_results = run_mlp_model_selection(
+    mlp_results = run_mlp_test_comparison(
         candidate_specs=candidate_specs,
         scaling_summary=scaling_summary,
         analysis_policy=analysis_policy,
         output_dir=output_dir,
     )
 
-    write_preparation_selection_plots(
-        mlp_results["mlp_preparation_selection"],
-        plots_dir / "preparation_selection",
+    write_test_comparison_metric_plots(
+        mlp_results["mlp_test_comparison"],
+        plots_dir / "test_comparison_metrics",
+    )
+    write_test_comparison_plots(
+        mlp_results["mlp_forecasts"],
+        plots_dir / "test_comparison",
     )
     write_univariate_comparison_plots(
         arima_metrics=arima_results["metrics"],
@@ -195,12 +207,10 @@ def build_mlp_preparation_candidates(
     window_rows = []
 
     splits = protocol["splits"]
-    train_fraction = float(splits["train"]) + float(splits["validation"])
-    validation_fraction = float(splits["validation"])
+    train_fraction = float(splits["train"])
     horizon_duration = str(protocol["forecast_horizon"])
     lookback_duration = str(protocol["lookback_window"])
     difference_orders = list(protocol.get("differentiation_orders", [0, 1, 2]))
-    smoothing_windows = list(protocol.get("train_only_smoothing_windows", ["none"]))
     scaling_method = str(protocol.get("scaling", {}).get("method", "standard"))
 
     for granularity in target_granularities:
@@ -215,7 +225,6 @@ def build_mlp_preparation_candidates(
         scaled_frame, scaling_summary = build_scaled_target_frame(
             frame,
             train_fraction,
-            validation_fraction,
             granularity,
             target_column,
             frequency,
@@ -226,7 +235,7 @@ def build_mlp_preparation_candidates(
 
         for difference_order in difference_orders:
             transformed_frame = build_transformed_mlp_frame(scaled_frame, difference_order)
-            for smoothing_window in smoothing_windows:
+            for smoothing_window in smoothing_windows_for_granularity(protocol, granularity):
                 if smoothing_window != "none":
                     try:
                         steps_for_duration(smoothing_window, frequency)
@@ -235,7 +244,6 @@ def build_mlp_preparation_candidates(
                 prepared_frame = apply_train_only_smoothing(transformed_frame, smoothing_window, frequency)
                 candidate_label = build_candidate_label(granularity, difference_order, smoothing_window)
                 train_windows = build_prepared_windows(prepared_frame, "train", lookback_steps, horizon_steps)
-                validation_windows = build_prepared_windows(prepared_frame, "validation", lookback_steps, horizon_steps)
                 test_windows = build_prepared_windows(prepared_frame, "test", lookback_steps, horizon_steps)
                 candidate_specs.append(
                     {
@@ -252,7 +260,6 @@ def build_mlp_preparation_candidates(
                         "prepared_frame": prepared_frame,
                         "scaler_row": scaler_row,
                         "train_windows": train_windows,
-                        "validation_windows": validation_windows,
                         "test_windows": test_windows,
                     }
                 )
@@ -269,7 +276,6 @@ def build_mlp_preparation_candidates(
                         "horizon_duration": horizon_duration,
                         "horizon_steps": horizon_steps,
                         "train_windows": len(train_windows["x"]),
-                        "validation_windows": len(validation_windows["x"]),
                         "test_windows": len(test_windows["x"]),
                     }
                 )
@@ -279,117 +285,59 @@ def build_mlp_preparation_candidates(
     return candidate_specs, scaling_summary_frame, mlp_window_summary
 
 
-def run_mlp_model_selection(
+def run_mlp_test_comparison(
     candidate_specs: list[dict[str, Any]],
     scaling_summary: pd.DataFrame,
     analysis_policy: dict[str, Any],
     output_dir: Path,
 ) -> dict[str, pd.DataFrame]:
-    """Evaluate every MLP preparation candidate and record the recommendation tables."""
+    """Forecast the chronological test split for every configured MLP preparation candidate."""
     del scaling_summary
     mlp_config = analysis_policy.get("mlp", {})
     if not bool(mlp_config.get("enabled", False)) or not candidate_specs:
         return {
             "mlp_metrics": pd.DataFrame(),
             "mlp_forecasts": pd.DataFrame(),
-            "mlp_preparation_selection": pd.DataFrame(),
+            "mlp_test_comparison": pd.DataFrame(),
             "mlp_parameter_effects": pd.DataFrame(),
         }
 
-    parameter_rows = []
-    selected_metric_rows = []
-    selected_forecasts = []
+    metric_rows = []
+    test_forecasts = []
+    learning_rates = mlp_config.get("learning_rate_grid", mlp_config.get("initial_learning_rate_grid", [0.001]))
 
     for candidate in candidate_specs:
         train_windows = candidate["train_windows"]
-        validation_windows = candidate["validation_windows"]
         test_windows = candidate["test_windows"]
-        if train_windows["x"].empty or validation_windows["x"].empty or test_windows["x"].empty:
+        if train_windows["x"].empty or test_windows["x"].empty:
             continue
 
         hidden_units = select_hidden_units(candidate["lookback_steps"], mlp_config)
-        for learning_rate_init in mlp_config.get("initial_learning_rate_grid", [0.001]):
-            model, warning_messages = fit_mlp_model(
-                train_windows["x"],
-                train_windows["y_model"],
-                hidden_units,
-                float(learning_rate_init),
-                mlp_config,
+        for learning_rate_init in learning_rates:
+            test_forecast, warning_messages = forecast_neural_mlp_candidate(
+                candidate=candidate,
+                hidden_units=hidden_units,
+                learning_rate_init=float(learning_rate_init),
+                mlp_config=mlp_config,
             )
-            validation_forecast = forecast_prepared_split(validation_windows, candidate, model)
-            test_forecast = forecast_prepared_split(test_windows, candidate, model)
-            validation_metrics = forecast_metrics(validation_forecast["y"], validation_forecast["forecast"])
+            if test_forecast.empty:
+                continue
             test_metrics = forecast_metrics(test_forecast["y"], test_forecast["forecast"])
-            parameter_rows.append(
+            test_forecast["model"] = "NeuralForecast_MLP_target_lags"
+            test_forecast["granularity"] = candidate["granularity"]
+            test_forecast["split"] = "test"
+            test_forecast["candidate_label"] = candidate["candidate_label"]
+            test_forecast["difference_order"] = candidate["difference_order"]
+            test_forecast["transform_name"] = candidate["transform_name"]
+            test_forecast["training_smoothing_window"] = candidate["training_smoothing_window"]
+            test_forecast["learning_rate_init"] = float(learning_rate_init)
+            test_forecasts.append(test_forecast)
+            metric_rows.append(
                 {
+                    "model": "NeuralForecast_MLP_target_lags",
+                    "split": "test",
                     "candidate_label": candidate["candidate_label"],
                     "granularity": candidate["granularity"],
-                    "difference_order": candidate["difference_order"],
-                    "transform_name": candidate["transform_name"],
-                    "training_smoothing_window": candidate["training_smoothing_window"],
-                    "hidden_units": hidden_units,
-                    "learning_rate_init": float(learning_rate_init),
-                    "max_iter": int(mlp_config.get("max_iter", 5000)),
-                    "validation_mae": validation_metrics["mae"],
-                    "validation_rmse": validation_metrics["rmse"],
-                    "test_mae": test_metrics["mae"],
-                    "test_rmse": test_metrics["rmse"],
-                    "warning_count": len(warning_messages),
-                    "warnings": "; ".join(warning_messages),
-                }
-            )
-
-    parameter_effects = pd.DataFrame(parameter_rows)
-    if parameter_effects.empty:
-        return {
-            "mlp_metrics": pd.DataFrame(),
-            "mlp_forecasts": pd.DataFrame(),
-            "mlp_preparation_selection": pd.DataFrame(),
-            "mlp_parameter_effects": pd.DataFrame(),
-        }
-
-    candidate_selection = (
-        parameter_effects.sort_values(
-            ["granularity", "candidate_label", "validation_mae", "validation_rmse", "learning_rate_init"]
-        )
-        .groupby(["granularity", "candidate_label"], as_index=False)
-        .first()
-    )
-    candidate_selection["selection_mode"] = str(mlp_config.get("selection_mode", "validation_recommendation"))
-
-    best_rows = (
-        candidate_selection.sort_values(["granularity", "validation_mae", "validation_rmse", "learning_rate_init"])
-        .groupby("granularity", as_index=False)
-        .first()
-    )
-    best_rows["selection_basis"] = "validation"
-
-    for best_row in best_rows.to_dict("records"):
-        candidate = next(
-            item for item in candidate_specs
-            if item["candidate_label"] == best_row["candidate_label"] and item["granularity"] == best_row["granularity"]
-        )
-        model, warning_messages = fit_mlp_model(
-            candidate["train_windows"]["x"],
-            candidate["train_windows"]["y_model"],
-            int(best_row["hidden_units"]),
-            float(best_row["learning_rate_init"]),
-            mlp_config,
-        )
-
-        for split_name, windows in [("validation", candidate["validation_windows"]), ("test", candidate["test_windows"])]:
-            split_forecast = forecast_prepared_split(windows, candidate, model)
-            split_forecast["model"] = "MLP_target_lags"
-            split_forecast["granularity"] = candidate["granularity"]
-            split_forecast["split"] = split_name
-            split_forecast["candidate_label"] = candidate["candidate_label"]
-            selected_forecasts.append(split_forecast)
-            selected_metric_rows.append(
-                {
-                    "model": "MLP_target_lags",
-                    "split": split_name,
-                    "granularity": candidate["granularity"],
-                    "candidate_label": candidate["candidate_label"],
                     "difference_order": candidate["difference_order"],
                     "transform_name": candidate["transform_name"],
                     "training_smoothing_window": candidate["training_smoothing_window"],
@@ -397,27 +345,46 @@ def run_mlp_model_selection(
                     "horizon_steps": candidate["horizon_steps"],
                     "lookback_duration": candidate["lookback_duration"],
                     "horizon_duration": candidate["horizon_duration"],
-                    "hidden_units": int(best_row["hidden_units"]),
-                    "learning_rate_init": float(best_row["learning_rate_init"]),
+                    "hidden_units": hidden_units,
+                    "learning_rate_init": float(learning_rate_init),
+                    "engine": str(mlp_config.get("engine", "neuralforecast")),
+                    "optimizer": str(mlp_config.get("optimizer", "adam")),
+                    "num_layers": int(mlp_config.get("num_layers", 1)),
+                    "min_steps": int(mlp_config.get("min_steps", 5000)),
+                    "max_steps": int(mlp_config.get("max_steps", 7500)),
+                    "accelerator": str(mlp_config.get("accelerator", "auto")),
                     "warning_count": len(warning_messages),
                     "warnings": "; ".join(warning_messages),
-                    "selection_basis": str(best_row["selection_basis"]),
-                    **forecast_metrics(split_forecast["y"], split_forecast["forecast"]),
+                    **test_metrics,
                 }
             )
 
+    test_metrics_frame = pd.DataFrame(metric_rows)
+    if test_metrics_frame.empty:
+        return {
+            "mlp_metrics": pd.DataFrame(),
+            "mlp_forecasts": pd.DataFrame(),
+            "mlp_test_comparison": pd.DataFrame(),
+            "mlp_parameter_effects": pd.DataFrame(),
+        }
+
+    test_metrics_frame = test_metrics_frame.sort_values(
+        ["granularity", "difference_order", "training_smoothing_window", "learning_rate_init"]
+    ).reset_index(drop=True)
+    test_metrics_frame["selection_mode"] = str(mlp_config.get("selection_mode", "test_comparison"))
+
     return {
-        "mlp_metrics": pd.DataFrame(selected_metric_rows),
-        "mlp_forecasts": pd.concat(selected_forecasts, ignore_index=True),
-        "mlp_preparation_selection": candidate_selection,
-        "mlp_parameter_effects": parameter_effects,
+        "mlp_metrics": test_metrics_frame,
+        "mlp_forecasts": pd.concat(test_forecasts, ignore_index=True),
+        "mlp_test_comparison": test_metrics_frame.copy(),
+        "mlp_parameter_effects": test_metrics_frame.copy(),
     }
 
 
 def build_transformed_mlp_frame(scaled_frame: pd.DataFrame, difference_order: int) -> pd.DataFrame:
     transformed = scaled_frame.copy()
     transformed["model_series"] = np.nan
-    for split in ["train", "validation", "test"]:
+    for split in ["train", "test"]:
         mask = transformed["split"] == split
         series = transformed.loc[mask, "y_scaled"].reset_index(drop=True)
         if difference_order == 0:
@@ -504,40 +471,80 @@ def build_prepared_windows(
     }
 
 
-def fit_mlp_model(
-    train_x: pd.DataFrame,
-    train_y: pd.Series,
+def forecast_neural_mlp_candidate(
+    candidate: dict[str, Any],
     hidden_units: int,
     learning_rate_init: float,
     mlp_config: dict[str, Any],
-) -> tuple[MLPRegressor, list[str]]:
-    activation = cast(Literal["identity", "logistic", "tanh", "relu"], str(mlp_config.get("activation", "relu")))
-    solver = cast(Literal["lbfgs", "sgd", "adam"], str(mlp_config.get("solver", "sgd")))
-    learning_rate = cast(Literal["constant", "invscaling", "adaptive"], str(mlp_config.get("learning_rate", "adaptive")))
-    model = MLPRegressor(
-        hidden_layer_sizes=(hidden_units,),
-        activation=activation,
-        solver=solver,
-        learning_rate=learning_rate,
-        learning_rate_init=learning_rate_init,
-        max_iter=int(mlp_config.get("max_iter", 5000)),
-        random_state=int(mlp_config.get("random_state", 42)),
+) -> tuple[pd.DataFrame, list[str]]:
+    """Fit one NeuralForecast MLP on train data and score the chronological test window."""
+    prepared = candidate["prepared_frame"].dropna(subset=["model_series"]).copy()
+    if prepared.empty:
+        return pd.DataFrame(columns=["ds", "y", "forecast"]), []
+
+    test_size = int((prepared["split"] == "test").sum())
+    if test_size <= 0:
+        return pd.DataFrame(columns=["ds", "y", "forecast"]), []
+
+    model_alias = f"MLP_lr_{format_learning_rate_alias(learning_rate_init)}"
+    forecast_frame = prepared[["unique_id", "ds", "model_series"]].rename(columns={"model_series": "y"})
+    neural_model = NeuralForecastMLP(
+        h=int(candidate["horizon_steps"]),
+        input_size=int(candidate["lookback_steps"]),
+        num_layers=int(mlp_config.get("num_layers", 1)),
+        hidden_size=int(hidden_units),
+        max_steps=int(mlp_config.get("max_steps", 7500)),
+        learning_rate=float(learning_rate_init),
+        batch_size=int(mlp_config.get("batch_size", 1)),
+        windows_batch_size=int(mlp_config.get("windows_batch_size", 1024)),
+        inference_windows_batch_size=int(mlp_config.get("inference_windows_batch_size", -1)),
+        scaler_type=str(mlp_config.get("scaler_type", "identity")),
+        random_seed=int(mlp_config.get("random_state", 42)),
+        alias=model_alias,
+        min_steps=int(mlp_config.get("min_steps", 5000)),
+        accelerator=str(mlp_config.get("accelerator", "auto")),
+        devices=int(mlp_config.get("devices", 1)),
+        logger=False,
+        enable_checkpointing=False,
+        enable_model_summary=False,
+        enable_progress_bar=False,
     )
+    engine = NeuralForecast(models=[neural_model], freq=str(candidate["frequency"]))
     with warnings.catch_warnings(record=True) as caught_warnings:
         warnings.simplefilter("always")
-        model.fit(train_x, train_y)
-    return model, sorted({str(item.message) for item in caught_warnings})
+        cross_validation = engine.cross_validation(
+            df=forecast_frame,
+            n_windows=None,
+            val_size=0,
+            test_size=test_size,
+            step_size=1,
+            refit=False,
+            verbose=False,
+        )
+    warnings_seen = sorted({str(item.message) for item in caught_warnings})
+    return build_neural_mlp_test_forecast(
+        cross_validation=cross_validation,
+        model_alias=model_alias,
+        candidate=candidate,
+    ), warnings_seen
 
 
-def forecast_prepared_split(
-    split_windows: WindowBundle,
+def build_neural_mlp_test_forecast(
+    cross_validation: pd.DataFrame,
+    model_alias: str,
     candidate: dict[str, Any],
-    model: MLPRegressor,
 ) -> pd.DataFrame:
-    x_values = split_windows["x"]
-    if not isinstance(x_values, pd.DataFrame):
-        raise TypeError("Prepared windows must store features in a pandas DataFrame.")
-    predicted_model_values = pd.Series(model.predict(x_values))
+    test_windows = candidate["test_windows"]
+    target_dates = test_windows["target_dates"]
+    if not isinstance(target_dates, pd.Series):
+        raise TypeError("Prepared windows must store target dates in a pandas Series.")
+
+    selected = cross_validation[cross_validation["ds"].isin(set(target_dates))].sort_values("ds").copy()
+    if selected.empty:
+        return pd.DataFrame(columns=["ds", "y", "forecast"])
+
+    split_windows = build_inverse_windows_for_dates(candidate["prepared_frame"], selected["ds"])
+    predicted_model_values = selected[model_alias].reset_index(drop=True)
     forecast = inverse_prepared_predictions(
         predicted_model_values,
         split_windows,
@@ -550,11 +557,34 @@ def forecast_prepared_split(
         raise TypeError("Prepared windows must store target dates and actual values in pandas Series objects.")
     return pd.DataFrame(
         {
-            "ds": target_dates.reset_index(drop=True),
+            "ds": selected["ds"].reset_index(drop=True),
             "y": actual_values.reset_index(drop=True),
             "forecast": forecast.reset_index(drop=True),
         }
     )
+
+
+def build_inverse_windows_for_dates(prepared_frame: pd.DataFrame, target_dates: pd.Series) -> WindowBundle:
+    split_frame = prepared_frame[prepared_frame["split"] == "test"].reset_index(drop=True)
+    date_to_position = {value: index for index, value in enumerate(split_frame["ds"])}
+    y_actual = []
+    prev_y_1 = []
+    prev_y_2 = []
+
+    for target_date in target_dates.reset_index(drop=True):
+        position = date_to_position[target_date]
+        y_actual.append(_frame_float(split_frame, position, "y"))
+        prev_y_1.append(_frame_float(split_frame, position - 1, "y") if position - 1 >= 0 else np.nan)
+        prev_y_2.append(_frame_float(split_frame, position - 2, "y") if position - 2 >= 0 else np.nan)
+
+    return {
+        "x": pd.DataFrame(),
+        "y_model": pd.Series(dtype=float),
+        "target_dates": target_dates.reset_index(drop=True),
+        "y_actual": pd.Series(y_actual),
+        "prev_y_1": pd.Series(prev_y_1),
+        "prev_y_2": pd.Series(prev_y_2),
+    }
 
 
 def inverse_prepared_predictions(
@@ -598,8 +628,19 @@ def select_hidden_units(lookback_steps: int, mlp_config: dict[str, Any]) -> int:
     return int(mlp_config.get("hidden_units", lookback_steps))
 
 
+def format_learning_rate_alias(learning_rate_init: float) -> str:
+    return f"{learning_rate_init:g}".replace("-", "m").replace(".", "p")
+
+
 def build_candidate_label(granularity: str, difference_order: int, smoothing_window: str) -> str:
     return f"{granularity}_d{difference_order}_smooth_{smoothing_window}"
+
+
+def smoothing_windows_for_granularity(protocol: dict[str, Any], granularity: str) -> list[str]:
+    windows_by_granularity = protocol.get("train_only_smoothing_windows_by_granularity", {})
+    if isinstance(windows_by_granularity, dict) and granularity in windows_by_granularity:
+        return [str(value) for value in windows_by_granularity[granularity]]
+    return [str(value) for value in protocol.get("train_only_smoothing_windows", ["none"])]
 
 
 def transform_name_for_order(difference_order: int) -> str:
@@ -656,7 +697,7 @@ def parse_arima_order(arima_config: dict[str, Any]) -> tuple[int, int, int]:
 
 def protocol_train_test_boundary(protocol: dict[str, Any]) -> float:
     splits = protocol["splits"]
-    return float(splits["train"]) + float(splits["validation"])
+    return float(splits["train"])
 
 
 def add_forecast_metadata(

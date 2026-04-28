@@ -203,6 +203,8 @@ def expected_rows_per_window(output_granularity: str, input_frequency: str) -> i
 
 def steps_for_duration(duration: str, frequency: str) -> int:
     """Convert a real-time duration into row steps for one sampling frequency."""
+    if str(duration).lower() == "1step":
+        return 1
     duration_delta = pd.Timedelta(duration)
     frequency_delta = pd.Timedelta(frequency)
     if frequency_delta <= pd.Timedelta(0):
@@ -339,28 +341,6 @@ def split_train_test(frame: pd.DataFrame, train_fraction: float) -> tuple[pd.Dat
     return frame.iloc[:split_index].copy(), frame.iloc[split_index:].copy()
 
 
-def split_train_validation_test(
-    frame: pd.DataFrame,
-    train_fraction: float,
-    validation_fraction: float,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Chronologically split rows into model-train, validation, and final test sets."""
-    if not 0 < train_fraction < 1:
-        raise ValueError("train_fraction must be between 0 and 1.")
-    if validation_fraction < 0 or validation_fraction >= train_fraction:
-        raise ValueError("validation_fraction must be non-negative and smaller than train_fraction.")
-
-    train_end = int(len(frame) * (train_fraction - validation_fraction))
-    validation_end = int(len(frame) * train_fraction)
-    if train_end <= 0 or validation_end <= train_end or validation_end >= len(frame):
-        raise ValueError("Configured split fractions create an empty train, validation, or test set.")
-    return (
-        frame.iloc[:train_end].copy(),
-        frame.iloc[train_end:validation_end].copy(),
-        frame.iloc[validation_end:].copy(),
-    )
-
-
 def infer_exogenous_columns(dataset: pd.DataFrame, target_column: str, timestamp_column: str = "date") -> list[str]:
     excluded = {target_column, timestamp_column}
     return [
@@ -442,19 +422,17 @@ def standardize_columns(
 def build_scaled_target_frame(
     frame: pd.DataFrame,
     train_fraction: float,
-    validation_fraction: float,
     granularity: str,
     target_column: str,
     frequency: str,
     scaling_method: str = "standard",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    train_frame, validation_frame, test_frame = split_train_validation_test(frame, train_fraction, validation_fraction)
+    train_frame, test_frame = split_train_test(frame, train_fraction)
     scaler = fit_linear_scaler(train_frame["y"], scaling_method)
 
     scaled_frame = pd.concat(
         [
             train_frame.assign(split="train"),
-            validation_frame.assign(split="validation"),
             test_frame.assign(split="test"),
         ],
         ignore_index=True,
@@ -469,7 +447,6 @@ def build_scaled_target_frame(
                 "scaler": scaling_method,
                 "fit_split": "train",
                 "train_rows": len(train_frame),
-                "validation_rows": len(validation_frame),
                 "test_rows": len(test_frame),
                 "train_mean": scaler.get("mean", np.nan),
                 "train_std": scaler.get("std", np.nan),
@@ -478,8 +455,6 @@ def build_scaled_target_frame(
                 "train_scale": scaler["scale"],
                 "train_start": train_frame["ds"].iloc[0],
                 "train_end": train_frame["ds"].iloc[-1],
-                "validation_start": validation_frame["ds"].iloc[0],
-                "validation_end": validation_frame["ds"].iloc[-1],
                 "test_start": test_frame["ds"].iloc[0],
                 "test_end": test_frame["ds"].iloc[-1],
             }

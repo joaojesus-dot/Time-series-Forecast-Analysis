@@ -332,7 +332,9 @@ def write_univariate_comparison_plots(
     if not arima_metrics.empty:
         metric_frames.append(arima_metrics.assign(model_family="ARIMA", split="test"))
     if not mlp_metrics.empty and "split" in mlp_metrics.columns:
-        metric_frames.append(mlp_metrics[mlp_metrics["split"] == "test"].copy().assign(model_family="MLP"))
+        test_mlp_metrics = mlp_metrics[mlp_metrics["split"] == "test"].copy()
+        if not test_mlp_metrics.empty:
+            metric_frames.append(test_mlp_metrics.assign(model_family="MLP"))
     if metric_frames:
         comparable_metrics = pd.concat(metric_frames, ignore_index=True)
         write_univariate_metric_comparison(comparable_metrics, output_dir / "univariate_metric_comparison.png")
@@ -480,28 +482,80 @@ def write_target_correlation_barplots(
         _save_figure(fig, output_dir / f"{granularity}_target_correlation_barplot.png")
 
 
-def write_preparation_selection_plots(
-    validation_results: pd.DataFrame,
+def write_test_comparison_metric_plots(
+    test_results: pd.DataFrame,
     output_dir: Path,
 ) -> None:
-    if validation_results.empty:
+    if test_results.empty:
         return
     output_dir.mkdir(parents=True, exist_ok=True)
-    for granularity, frame in validation_results.groupby("granularity"):
-        ordered = frame.sort_values("validation_mae")
-        fig, axes = plt.subplots(1, 2, figsize=(16, 5))
-        sns.barplot(data=ordered, x="candidate_label", y="validation_mae", ax=axes[0], color="#1f4b99")
-        axes[0].set_title(f"{granularity} - Validation MAE By Preparation")
-        axes[0].set_xlabel("Preparation candidate")
-        axes[0].set_ylabel("Validation MAE")
-        axes[0].tick_params(axis="x", rotation=70)
+    for granularity, frame in test_results.groupby("granularity"):
+        ordered = frame.sort_values(["difference_order", "training_smoothing_window", "learning_rate_init"]).copy()
+        ordered["candidate_short"] = ordered["candidate_label"].str.replace(f"{granularity}_", "", regex=False)
 
-        sns.barplot(data=ordered, x="candidate_label", y="test_mae", ax=axes[1], color="#4c9a2a")
-        axes[1].set_title(f"{granularity} - Test MAE By Preparation")
-        axes[1].set_xlabel("Preparation candidate")
-        axes[1].set_ylabel("Test MAE")
-        axes[1].tick_params(axis="x", rotation=70)
-        _save_figure(fig, output_dir / f"{granularity}_preparation_selection.png")
+        fig, axes = plt.subplots(1, 3, figsize=(20, 5))
+        for axis, metric in zip(axes, ["mae", "rmse", "r2"]):
+            sns.barplot(data=ordered, x="candidate_short", y=metric, hue="learning_rate_init", ax=axis)
+            axis.set_title(f"{granularity} - Test Comparison {metric.upper()}")
+            axis.set_xlabel("Candidate")
+            axis.set_ylabel(metric.upper())
+            axis.tick_params(axis="x", rotation=70)
+            axis.legend(loc="upper right", fontsize=8, title="LR")
+        _save_figure(fig, output_dir / f"{granularity}_test_comparison_metrics.png")
+
+
+def write_test_comparison_plots(
+    candidate_forecasts: pd.DataFrame,
+    output_dir: Path,
+    max_points: int = 600,
+) -> None:
+    if candidate_forecasts.empty:
+        return
+    required_columns = {"granularity", "candidate_label", "ds", "y", "forecast"}
+    if not required_columns.issubset(candidate_forecasts.columns):
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    group_columns = ["granularity", "candidate_label"]
+    if "learning_rate_init" in candidate_forecasts.columns:
+        group_columns.append("learning_rate_init")
+
+    for group_values, frame in candidate_forecasts.groupby(group_columns):
+        if len(group_columns) == 3:
+            granularity, candidate_label, learning_rate_init = group_values
+            learning_rate_label = f"lr={learning_rate_init:g}"
+        else:
+            granularity, candidate_label = group_values
+            learning_rate_label = ""
+        plot_frame = frame.sort_values("ds").head(max_points).copy()
+        if plot_frame.empty:
+            continue
+
+        fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+        axes[0].plot(plot_frame["ds"], plot_frame["y"], color="#222222", linewidth=1.1, label="actual")
+        axes[0].plot(plot_frame["ds"], plot_frame["forecast"], color="#1f4b99", linewidth=1.0, label="forecast")
+        title_suffix = f" - {learning_rate_label}" if learning_rate_label else ""
+        axes[0].set_title(f"{granularity} - {candidate_label}{title_suffix} Test Comparison")
+        axes[0].set_ylabel("Target")
+        axes[0].legend(loc="upper right", fontsize=8)
+
+        axes[1].plot(
+            plot_frame["ds"],
+            plot_frame["forecast"] - plot_frame["y"],
+            color="#b24d2b",
+            linewidth=1.0,
+            label="forecast - actual",
+        )
+        axes[1].axhline(0, color="#333333", linewidth=0.8)
+        axes[1].set_title("Test Comparison Error")
+        axes[1].set_xlabel("date")
+        axes[1].set_ylabel("Forecast - actual")
+        axes[1].legend(loc="upper right", fontsize=8)
+
+        safe_label = str(candidate_label).replace("/", "-").replace("\\", "-")
+        safe_lr = learning_rate_label.replace("=", "_").replace(".", "p")
+        filename = f"{safe_label}_{safe_lr}_test_comparison.png" if safe_lr else f"{safe_label}_test_comparison.png"
+        _save_figure(fig, output_dir / str(granularity) / filename)
 
 
 def write_model_history_plot(model_key: str, model_frame: pd.DataFrame, output_path: Path) -> None:

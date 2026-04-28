@@ -1,8 +1,10 @@
 {
   "smoothing_windows": {
+    "15s": 15,
     "30s": 30,
     "1min": 60,
-    "5min": 300
+    "2min": 120,
+    "3min": 180
   },
   "candidate_b_plot_groups": {
     "target": ["TE_8313B.AV_0#"],
