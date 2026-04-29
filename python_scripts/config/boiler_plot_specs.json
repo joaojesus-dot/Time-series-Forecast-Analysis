@@ -79,10 +79,22 @@
       "output_path_ref": ["pre_forecasting_plots", "target_transform_std_summary.png"]
     },
     {
+      "kind": "scaling_std_summary",
+      "frame": "scaling_summary",
+      "title": "Target Standard Deviation By Scaling Method",
+      "output_path_ref": ["pre_forecasting_plots", "target_scaling_std_summary.png"]
+    },
+    {
       "kind": "target_transform_plots",
       "transform_series_ref": true,
       "output_dir_ref": "pre_forecasting_plots",
       "target_ylabel": "Temperature",
+      "zoom_duration": "6h"
+    },
+    {
+      "kind": "target_scaling_plots",
+      "scaling_series_ref": true,
+      "output_dir_ref": "pre_forecasting_plots",
       "zoom_duration": "6h"
     }
   ]

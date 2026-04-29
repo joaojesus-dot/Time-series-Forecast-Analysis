@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
 
 import pandas as pd
 
-
-class FeatureSelection(TypedDict):
-    target_column: str
-    candidate_a_features: list[str]
-    candidate_b_features: list[str]
-    candidate_c_features: list[str]
+try:
+    from preprocessing import FeatureSelection
+except ImportError:  # pragma: no cover - package import path
+    from .preprocessing import FeatureSelection
 
 
 def write_documentation_outputs(
@@ -23,9 +21,11 @@ def write_documentation_outputs(
     quality_summary: dict[str, Any],
     resampling_policy: dict[str, Any],
     scaling_method: str,
+    scaling_methods: list[str],
     granularity_summary: pd.DataFrame,
     distribution_summary: pd.DataFrame,
     smoothing_summary: pd.DataFrame,
+    scaling_summary: pd.DataFrame,
     autocorrelation_summary: pd.DataFrame,
     stationarity_summary: pd.DataFrame,
     correlation_summary: pd.DataFrame,
@@ -51,8 +51,10 @@ def write_documentation_outputs(
             quality_summary,
             resampling_policy,
             scaling_method,
+            scaling_methods,
             granularity_summary,
             smoothing_summary,
+            scaling_summary,
             stationarity_summary,
         ),
     }
@@ -99,6 +101,7 @@ def write_experiment_plan(
         "## MLP Rules",
         f"- Lookback window: `{protocol['lookback_window']}`.",
         f"- Forecast horizon: `{protocol['forecast_horizon']}`.",
+        "- Horizon note: `1step` means one row ahead at each granularity, so raw, 30s, and 1min metrics are not equal real-time horizons.",
         "- Input features: target lags only.",
         "- Hidden architecture: single hidden layer.",
         f"- Engine: `{mlp_config.get('engine', 'neuralforecast')}`.",
@@ -108,6 +111,9 @@ def write_experiment_plan(
         f"- Minimum training steps: `{mlp_config.get('min_steps', 5000)}`.",
         f"- Maximum training steps: `{mlp_config.get('max_steps', 7500)}`.",
         f"- Accelerator: `{mlp_config.get('accelerator', 'auto')}`.",
+        f"- Windows batch size: `{mlp_config.get('windows_batch_size', 1024)}`.",
+        f"- DataLoader workers: `{mlp_config.get('dataloader_num_workers', 0)}`.",
+        f"- DataLoader pin memory: `{mlp_config.get('dataloader_pin_memory', False)}`.",
         f"- Comparison mode: `{mlp_config.get('selection_mode', 'test_comparison')}`.",
     ]
     output_path.write_text("\n".join(lines), encoding="utf-8")
@@ -140,6 +146,13 @@ def write_forecasting_report_suite(
         build_model_comparison_markdown(comparison_frame),
         encoding="utf-8",
     )
+    univariate_results = forecasting_results.get("univariate", {})
+    mlp_test_comparison = univariate_results.get("mlp_test_comparison", pd.DataFrame())
+    if not mlp_test_comparison.empty:
+        (reports_dir / "candidate_selection_report.md").write_text(
+            build_candidate_selection_markdown(target_column, forecasting_policy, mlp_test_comparison),
+            encoding="utf-8",
+        )
 
 
 def prune_stale_forecasting_reports(reports_dir: Path, models_dir: Path) -> None:
@@ -242,13 +255,17 @@ def build_data_preparation_markdown(
     quality_summary: dict[str, Any],
     resampling_policy: dict[str, Any],
     scaling_method: str,
+    scaling_methods: list[str],
     granularity_summary: pd.DataFrame,
     smoothing_summary: pd.DataFrame,
+    scaling_summary: pd.DataFrame,
     stationarity_summary: pd.DataFrame,
 ) -> str:
     aggregation_rows = granularity_summary.copy()
     smoothing_rows = smoothing_summary[smoothing_summary["transform"] == "trailing_rolling_mean"].copy()
+    scaling_rows = scaling_summary[scaling_summary["transform"].isin(["scaled_level", "scaled_first_difference"])].copy()
     differencing_rows = stationarity_summary[stationarity_summary["transform"] != "original"].copy()
+    scaling_recommendation = build_scaling_recommendation_markdown(scaling_summary, scaling_method)
     return "\n".join(
         [
             "# Data Preparation Report",
@@ -267,8 +284,18 @@ def build_data_preparation_markdown(
             "",
             "## Scaling",
             f"- Active scaling method: `{scaling_method}`.",
+            f"- Scaling methods compared before forecasting: `{', '.join(scaling_methods)}`.",
             "- Scaling is fitted on train only so test remains unseen during preprocessing.",
             "- A linear scaler is used so fitted forecasts can be converted back to the original target scale.",
+            "",
+            "## Scaling Diagnostics",
+            dataframe_to_markdown(
+                scaling_rows,
+                ["granularity", "scaling_method", "transform", "std", "min", "max", "skewness"],
+            ),
+            "",
+            "## Scaling Recommendation",
+            scaling_recommendation,
             "",
             "## Aggregation Levels",
             dataframe_to_markdown(aggregation_rows, ["granularity", "rows", "start_date", "end_date"]),
@@ -288,26 +315,71 @@ def build_data_preparation_markdown(
     )
 
 
+def build_scaling_recommendation_markdown(scaling_summary: pd.DataFrame, active_scaling_method: str) -> str:
+    if scaling_summary.empty:
+        return "_No scaling diagnostics available._"
+
+    level_rows = scaling_summary[scaling_summary["transform"] == "scaled_level"].copy()
+    first_difference_rows = scaling_summary[scaling_summary["transform"] == "scaled_first_difference"].copy()
+    if level_rows.empty:
+        return f"- Recommended method: `{active_scaling_method}`."
+
+    minmax_rows = level_rows[level_rows["scaling_method"] == "minmax"]
+    standard_rows = level_rows[level_rows["scaling_method"] == "standard"]
+    minmax_max = float(minmax_rows["max"].max()) if not minmax_rows.empty else float("nan")
+    standard_std = float(standard_rows["std"].mean()) if not standard_rows.empty else float("nan")
+    minmax_first_diff_std = (
+        float(first_difference_rows[first_difference_rows["scaling_method"] == "minmax"]["std"].mean())
+        if not first_difference_rows.empty
+        else float("nan")
+    )
+    standard_first_diff_std = (
+        float(first_difference_rows[first_difference_rows["scaling_method"] == "standard"]["std"].mean())
+        if not first_difference_rows.empty
+        else float("nan")
+    )
+
+    return "\n".join(
+        [
+            f"- Recommended method for the next forecasting run: `{active_scaling_method}`.",
+            (
+                f"- Train-fitted min-max scaling reaches a test maximum of `{minmax_max:.3f}`, "
+                "so future values move outside the nominal `[0, 1]` range."
+            ),
+            (
+                f"- Standard scaling keeps the scaled level near unit variance "
+                f"(mean std across granularities `{standard_std:.3f}`), which is a stable input scale for the MLP."
+            ),
+            (
+                f"- Differenced signals are much less compressed with standard scaling "
+                f"(mean first-difference std `{standard_first_diff_std:.3f}` vs `{minmax_first_diff_std:.3f}` for min-max), "
+                "so the MLP has a stronger learning signal after differencing."
+            ),
+            "- Both methods are linear and preserve the same temporal shape and skewness; the choice is therefore about numerical conditioning, not changing the signal.",
+        ]
+    )
+
+
 def build_forecasting_model_catalog(forecasting_results: dict[str, dict[str, pd.DataFrame]]) -> pd.DataFrame:
     rows = []
     univariate_results = forecasting_results.get("univariate", {})
-    if not univariate_results.get("metrics", pd.DataFrame()).empty:
+    if not univariate_results.get("arima_metrics", pd.DataFrame()).empty:
         rows.append(
             {
                 "model_key": "univariate_arima",
                 "model_label": "Univariate ARIMA",
                 "status": "evaluated",
-                "granularity_count": int(univariate_results["metrics"]["granularity"].nunique()),
+                "granularity_count": int(univariate_results["arima_metrics"]["granularity"].nunique()),
                 "report_path": "models/univariate_arima.md",
             }
         )
-    if not univariate_results.get("mlp_metrics", pd.DataFrame()).empty:
+    if not univariate_results.get("mlp_test_comparison", pd.DataFrame()).empty:
         rows.append(
             {
                 "model_key": "univariate_mlp_target_lags",
                 "model_label": "Univariate MLP Target Lags",
                 "status": "evaluated",
-                "granularity_count": int(univariate_results["mlp_metrics"]["granularity"].nunique()),
+                "granularity_count": int(univariate_results["mlp_test_comparison"]["granularity"].nunique()),
                 "report_path": "models/univariate_mlp_target_lags.md",
             }
         )
@@ -319,7 +391,7 @@ def build_forecasting_comparison_frame(
 ) -> pd.DataFrame:
     rows = []
     univariate_results = forecasting_results.get("univariate", {})
-    for row in univariate_results.get("metrics", pd.DataFrame()).to_dict("records"):
+    for row in univariate_results.get("arima_metrics", pd.DataFrame()).to_dict("records"):
         rows.append(
             {
                 "model_key": "univariate_arima",
@@ -335,7 +407,7 @@ def build_forecasting_comparison_frame(
                 "configuration": f"ARIMA({row['p']},{row['d']},{row['q']})",
             }
         )
-    for row in univariate_results.get("mlp_metrics", pd.DataFrame()).to_dict("records"):
+    for row in univariate_results.get("mlp_test_comparison", pd.DataFrame()).to_dict("records"):
         rows.append(
             {
                 "model_key": "univariate_mlp_target_lags",
@@ -370,7 +442,7 @@ def collect_forecasting_model_specs(
     specs = []
     univariate_results = forecasting_results.get("univariate", {})
 
-    arima_metrics = univariate_results.get("metrics", pd.DataFrame())
+    arima_metrics = univariate_results.get("arima_metrics", pd.DataFrame())
     if not arima_metrics.empty:
         specs.append(
             {
@@ -384,8 +456,8 @@ def collect_forecasting_model_specs(
             }
         )
 
-    mlp_metrics = univariate_results.get("mlp_metrics", pd.DataFrame())
-    if not mlp_metrics.empty:
+    mlp_test_comparison = univariate_results.get("mlp_test_comparison", pd.DataFrame())
+    if not mlp_test_comparison.empty:
         specs.append(
             {
                 "model_key": "univariate_mlp_target_lags",
@@ -393,12 +465,12 @@ def collect_forecasting_model_specs(
                 "target_column": target_column,
                 "protocol": protocol,
                 "config": forecasting_policy.get("univariate", {}).get("mlp", {}),
-                "metrics": mlp_metrics,
+                "metrics": mlp_test_comparison,
                 "sections": [
                     {
                         "title": "Test Comparison Metrics",
                         "body": dataframe_to_markdown(
-                            univariate_results.get("mlp_test_comparison", pd.DataFrame()),
+                            mlp_test_comparison,
                             [
                                 "split",
                                 "granularity",
@@ -409,25 +481,7 @@ def collect_forecasting_model_specs(
                                 "learning_rate_init",
                                 "min_steps",
                                 "max_steps",
-                                "mae",
-                                "rmse",
-                                "r2",
-                            ],
-                        ),
-                    },
-                    {
-                        "title": "Parameter Effects",
-                        "body": dataframe_to_markdown(
-                            univariate_results.get("mlp_parameter_effects", pd.DataFrame()),
-                            [
-                                "granularity",
-                                "candidate_label",
-                                "hidden_units",
-                                "learning_rate_init",
-                                "engine",
-                                "accelerator",
-                                "min_steps",
-                                "max_steps",
+                                "training_seconds",
                                 "mae",
                                 "rmse",
                                 "r2",
@@ -471,6 +525,8 @@ def build_forecasting_overview_markdown(
             f"- Modeled granularities: `{', '.join(protocol['target_granularities'])}`.",
             f"- Forecast horizon: `{protocol['forecast_horizon']}`.",
             f"- Lookback window: `{protocol['lookback_window']}`.",
+            "- A `1step` horizon is evaluated across the whole test split; it is one row ahead per timestamp, not a single forecast point.",
+            "- Because row duration differs by granularity, raw, 30s, and 1min one-step metrics should not be treated as the same real-time horizon.",
             "",
             "## Implemented Models",
             dataframe_to_markdown(catalog_frame, ["model_label", "status", "granularity_count", "report_path"]),
@@ -507,6 +563,139 @@ def build_model_comparison_markdown(comparison_frame: pd.DataFrame) -> str:
     )
 
 
+def build_candidate_selection_markdown(
+    target_column: str,
+    forecasting_policy: dict[str, Any],
+    mlp_test_comparison: pd.DataFrame,
+) -> str:
+    protocol = forecasting_policy["experimental_protocol"]
+    mlp_config = forecasting_policy.get("univariate", {}).get("mlp", {})
+    selected_config = list(mlp_config.get("selected_candidate_combinations", []))
+    selected_rows = match_selected_candidate_rows(mlp_test_comparison, selected_config)
+    best_by_granularity = (
+        mlp_test_comparison.sort_values(["granularity", "mae", "rmse", "learning_rate_init"])
+        .groupby("granularity", as_index=False)
+        .head(3)
+    )
+    smoothing_summary = summarize_metric_group(
+        mlp_test_comparison,
+        ["granularity", "training_smoothing_window"],
+        ["mae", "rmse", "r2"],
+    )
+    transform_summary = summarize_metric_group(
+        mlp_test_comparison,
+        ["granularity", "transform_name"],
+        ["mae", "rmse", "r2"],
+    )
+    learning_rate_summary = summarize_metric_group(
+        mlp_test_comparison,
+        ["learning_rate_init"],
+        ["mae", "rmse", "r2"],
+    )
+    selected_table_columns = [
+        "granularity",
+        "candidate_label",
+        "role",
+        "transform_name",
+        "training_smoothing_window",
+        "learning_rate_init",
+        "mae",
+        "rmse",
+        "r2",
+    ]
+
+    return "\n".join(
+        [
+            "# Candidate Selection Report",
+            "",
+            "## Scope",
+            f"- Target variable: `{target_column}`.",
+            f"- Review dataset: chronological test block from the `{protocol['splits']['test']:.0%}` holdout split.",
+            f"- Forecast horizon used for this review: `{protocol['forecast_horizon']}`.",
+            "- This is a chronological test-block candidate review, not random resampling or a separate model-selection split.",
+            "- `1step` means one row ahead at each granularity, so raw, 30s, and 1min scores are useful for within-granularity ranking but are not equal real-time forecast horizons.",
+            "",
+            "## Selected Candidate Combinations",
+            dataframe_to_markdown(selected_rows, selected_table_columns),
+            "",
+            "## Metric Evidence",
+            "- The selected combinations keep the best two candidates per granularity so the next stage can compare raw, 30s, and 1min behavior without mixing unequal one-step horizons into a single final decision.",
+            "- All selected candidates use `standard` scaling, matching the preprocessing recommendation.",
+            "- No selected candidate uses train-only smoothing because smoothing consistently worsened one-step test metrics.",
+            "- `0.0001` is retained as the main learning rate because it produced the best candidate in each granularity; `0.001` and `0.01` are retained only where they won a level-transformed alternative.",
+            "",
+            "## Best Three Per Granularity",
+            dataframe_to_markdown(
+                best_by_granularity,
+                [
+                    "granularity",
+                    "candidate_label",
+                    "transform_name",
+                    "training_smoothing_window",
+                    "learning_rate_init",
+                    "mae",
+                    "rmse",
+                    "r2",
+                ],
+            ),
+            "",
+            "## Smoothing Evidence",
+            dataframe_to_markdown(
+                smoothing_summary,
+                ["granularity", "training_smoothing_window", "mean_mae", "mean_rmse", "mean_r2"],
+            ),
+            "",
+            "## Transform Evidence",
+            dataframe_to_markdown(
+                transform_summary,
+                ["granularity", "transform_name", "mean_mae", "mean_rmse", "mean_r2"],
+            ),
+            "",
+            "## Learning-Rate Evidence",
+            dataframe_to_markdown(
+                learning_rate_summary,
+                ["learning_rate_init", "mean_mae", "mean_rmse", "mean_r2"],
+            ),
+            "",
+            "## Next Stage",
+            "- Use the selected combinations as the reduced candidate set for the next forecasting stage.",
+            "- The final project objective still requires a `10min` horizon run. At that stage, raw, 30s, and 1min will correspond to 120, 20, and 10 forecast steps respectively.",
+            "- These one-step results justify preprocessing and candidate reduction; they should not be presented as the final 10-minute forecasting result.",
+        ]
+    )
+
+
+def match_selected_candidate_rows(
+    mlp_test_comparison: pd.DataFrame,
+    selected_config: list[dict[str, Any]],
+) -> pd.DataFrame:
+    rows = []
+    for selected in selected_config:
+        mask = (
+            (mlp_test_comparison["granularity"] == selected["granularity"])
+            & (mlp_test_comparison["difference_order"].astype(int) == int(selected["difference_order"]))
+            & (mlp_test_comparison["training_smoothing_window"] == selected["training_smoothing_window"])
+            & (mlp_test_comparison["learning_rate_init"].astype(float) == float(selected["learning_rate_init"]))
+        )
+        matched = mlp_test_comparison[mask].copy()
+        if matched.empty:
+            rows.append({**selected, "candidate_label": "", "mae": float("nan"), "rmse": float("nan"), "r2": float("nan")})
+            continue
+        row = matched.sort_values(["mae", "rmse"]).iloc[0].to_dict()
+        row["role"] = selected.get("role", "")
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def summarize_metric_group(
+    frame: pd.DataFrame,
+    group_columns: list[str],
+    metric_columns: list[str],
+) -> pd.DataFrame:
+    grouped = frame.groupby(group_columns, as_index=False)[metric_columns].mean()
+    return grouped.rename(columns={metric: f"mean_{metric}" for metric in metric_columns})
+
+
 def build_model_report_markdown(spec: dict[str, Any]) -> str:
     metrics = spec["metrics"]
     metric_columns = ["granularity", "mae", "rmse", "mape", "smape", "bias"]
@@ -525,6 +714,7 @@ def build_model_report_markdown(spec: dict[str, Any]) -> str:
             "learning_rate_init",
             "min_steps",
             "max_steps",
+            "training_seconds",
         ]
     if "p" in metrics.columns:
         metric_columns = ["granularity", "p", "d", "q", "mae", "rmse", "mape", "smape", "bias", "r2"]
@@ -598,6 +788,8 @@ def format_markdown_value(value: Any) -> str:
     if pd.isna(value):
         return ""
     if isinstance(value, float):
+        if value != 0 and abs(value) < 0.001:
+            return f"{value:.4g}"
         return f"{value:.3f}"
     return str(value).replace("\n", " ").replace("|", "/")
 

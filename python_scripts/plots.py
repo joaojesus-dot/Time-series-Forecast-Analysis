@@ -30,6 +30,8 @@ def write_plot_specs(plot_specs: list[dict[str, Any]], frames: dict[str, pd.Data
         "heatmap": _plot_heatmap_from_spec,
         "target_transform_plots": _plot_target_transform_plots,
         "smoothing_std_summary": _plot_smoothing_std_summary,
+        "scaling_std_summary": _plot_scaling_std_summary,
+        "target_scaling_plots": _plot_target_scaling_plots,
     }
 
     for spec in plot_specs:
@@ -182,6 +184,83 @@ def _plot_smoothing_std_summary(spec: dict[str, Any], frames: dict[str, pd.DataF
     _save_figure(fig, Path(spec["output_path"]))
 
 
+def _plot_scaling_std_summary(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
+    frame = frames[str(spec["frame"])].copy()
+    frame = frame[frame["transform"].isin(["scaled_level", "scaled_first_difference", "scaled_second_difference"])]
+    if frame.empty:
+        return
+
+    fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+    for axis, transform in zip(axes, ["scaled_level", "scaled_first_difference", "scaled_second_difference"]):
+        transform_frame = frame[frame["transform"] == transform]
+        sns.barplot(data=transform_frame, x="granularity", y="std", hue="scaling_method", ax=axis)
+        axis.set_title(transform.replace("_", " ").title())
+        axis.set_xlabel("")
+        axis.set_ylabel("Std")
+        axis.legend(loc="upper right", fontsize=8, title="Scaler")
+    axes[-1].set_xlabel("Granularity")
+    _save_figure(fig, Path(spec["output_path"]))
+
+
+def _plot_target_scaling_plots(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> None:
+    del frames
+    output_dir = Path(spec["output_dir"])
+    scaling_series = spec["scaling_series"]
+    by_dataset = {}
+
+    for item in scaling_series:
+        by_dataset.setdefault(item["id_key"], []).append(item)
+
+    for id_key, records in by_dataset.items():
+        level_records = [record for record in records if record["transform"] == "scaled_level"]
+        first_records = [record for record in records if record["transform"] == "scaled_first_difference"]
+        second_records = [record for record in records if record["transform"] == "scaled_second_difference"]
+        if not level_records:
+            continue
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 8))
+        for record in level_records:
+            dates = pd.to_datetime(record["dates"]).reset_index(drop=True)
+            values = pd.Series(record["values"]).reset_index(drop=True)
+            mask = _first_duration_mask(dates, str(spec.get("zoom_duration", "6h")))
+            axes[0, 0].plot(
+                dates[mask],
+                values[mask],
+                linewidth=1.0,
+                label=str(record["scaling_method"]),
+            )
+            axes[0, 1].hist(values.dropna(), bins=80, alpha=0.45, label=str(record["scaling_method"]))
+
+        for record in first_records:
+            values = pd.Series(record["values"]).dropna()
+            axes[1, 0].hist(values, bins=80, alpha=0.45, label=str(record["scaling_method"]))
+
+        for record in second_records:
+            values = pd.Series(record["values"]).dropna()
+            axes[1, 1].hist(values, bins=80, alpha=0.45, label=str(record["scaling_method"]))
+
+        axes[0, 0].set_title("Scaled Target Zoom")
+        axes[0, 0].set_xlabel("date")
+        axes[0, 0].set_ylabel("Scaled target")
+        axes[0, 1].set_title("Scaled Target Distribution")
+        axes[0, 1].set_xlabel("Scaled target")
+        axes[1, 0].set_title("Scaled First Difference Distribution")
+        axes[1, 0].set_xlabel("Scaled delta 1")
+        axes[1, 1].set_title("Scaled Second Difference Distribution")
+        axes[1, 1].set_xlabel("Scaled delta 2")
+
+        for axis in axes.ravel():
+            axis.legend(loc="upper right", fontsize=8, title="Scaler")
+        _save_figure(fig, output_dir / f"{id_key}_target_scaling_comparison.png")
+
+
+def _first_duration_mask(dates: pd.Series, duration: str) -> pd.Series:
+    if dates.empty:
+        return pd.Series(dtype=bool)
+    end_date = dates.min() + pd.Timedelta(duration)
+    return dates <= end_date
+
+
 def _plot_smoothing_comparison(
     id_key: str,
     original: dict[str, Any],
@@ -322,7 +401,7 @@ def _steps_for_duration(dates: pd.Series, duration: str) -> int:
 
 def write_univariate_comparison_plots(
     arima_metrics: pd.DataFrame,
-    mlp_metrics: pd.DataFrame,
+    mlp_test_comparison: pd.DataFrame,
     arima_forecasts: pd.DataFrame,
     mlp_forecasts: pd.DataFrame,
     output_dir: Path,
@@ -331,8 +410,8 @@ def write_univariate_comparison_plots(
     metric_frames = []
     if not arima_metrics.empty:
         metric_frames.append(arima_metrics.assign(model_family="ARIMA", split="test"))
-    if not mlp_metrics.empty and "split" in mlp_metrics.columns:
-        test_mlp_metrics = mlp_metrics[mlp_metrics["split"] == "test"].copy()
+    if not mlp_test_comparison.empty and "split" in mlp_test_comparison.columns:
+        test_mlp_metrics = mlp_test_comparison[mlp_test_comparison["split"] == "test"].copy()
         if not test_mlp_metrics.empty:
             metric_frames.append(test_mlp_metrics.assign(model_family="MLP"))
     if metric_frames:

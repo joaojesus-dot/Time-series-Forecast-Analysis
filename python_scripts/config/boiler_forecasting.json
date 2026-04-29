@@ -17,7 +17,8 @@
       "test": 0.2
     },
     "scaling": {
-      "method": "minmax",
+      "method": "standard",
+      "comparison_methods": ["minmax", "standard"],
       "fit_split": "train"
     },
     "metrics": ["mae", "rmse", "mape", "smape", "bias", "r2"],
@@ -30,8 +31,8 @@
   "write_full_forecasts": false,
   "write_forecast_plots": true,
   "run_tracking": {
-    "enabled": false,
-    "tag": "baseline",
+    "enabled": true,
+    "tag": "standard-real-mlp",
     "history_root": "history",
     "copy_plots": true
   },
@@ -57,10 +58,64 @@
       "num_layers": 1,
       "batch_size": 1,
       "windows_batch_size": 1024,
+      "dataloader_num_workers": 0,
+      "dataloader_pin_memory": true,
       "accelerator": "gpu",
       "devices": 1,
       "random_state": 42,
       "selection_mode": "test_comparison",
+      "selected_candidate_combinations": [
+        {
+          "granularity": "raw",
+          "difference_order": 1,
+          "transform_name": "first_difference",
+          "training_smoothing_window": "none",
+          "learning_rate_init": 0.0001,
+          "role": "best_short_horizon_baseline"
+        },
+        {
+          "granularity": "raw",
+          "difference_order": 2,
+          "transform_name": "second_difference",
+          "training_smoothing_window": "none",
+          "learning_rate_init": 0.0001,
+          "role": "raw_stationary_alternative"
+        },
+        {
+          "granularity": "30s",
+          "difference_order": 1,
+          "transform_name": "first_difference",
+          "training_smoothing_window": "none",
+          "learning_rate_init": 0.0001,
+          "role": "best_mid_granularity_candidate"
+        },
+        {
+          "granularity": "30s",
+          "difference_order": 0,
+          "transform_name": "level",
+          "training_smoothing_window": "none",
+          "learning_rate_init": 0.001,
+          "role": "30s_level_alternative"
+        },
+        {
+          "granularity": "1min",
+          "difference_order": 1,
+          "transform_name": "first_difference",
+          "training_smoothing_window": "none",
+          "learning_rate_init": 0.0001,
+          "role": "best_coarse_granularity_candidate"
+        },
+        {
+          "granularity": "1min",
+          "difference_order": 0,
+          "transform_name": "level",
+          "training_smoothing_window": "none",
+          "learning_rate_init": 0.01,
+          "role": "1min_level_alternative"
+        }
+      ],
+      "candidate_limit": null,
+      "learning_rate_limit": null,
       "write_window_data": false
     }
   },

@@ -17,6 +17,13 @@ class Scaler(TypedDict, total=False):
     scale: float
 
 
+class FeatureSelection(TypedDict):
+    target_column: str
+    candidate_a_features: list[str]
+    candidate_b_features: list[str]
+    candidate_c_features: list[str]
+
+
 SUPPORTED_AGGREGATIONS = {
     "mean": "mean",
     "median": "median",
@@ -50,7 +57,7 @@ def build_feature_subset(
     return dataset[[timestamp_column, target_column, *feature_columns]].copy()
 
 
-def build_feature_selection(family_reduction_rows: list[dict[str, Any]]) -> dict[str, Any]:
+def build_feature_selection(family_reduction_rows: list[dict[str, Any]]) -> FeatureSelection:
     """Derive forecasting subsets from the family-reduction config."""
     target_column = find_target_column(family_reduction_rows)
     return {
@@ -285,6 +292,92 @@ def build_target_transform_series(
     return transform_series
 
 
+def build_scaled_target_transform_series(
+    datasets: dict[str, pd.DataFrame],
+    target_column: str,
+    smoothing_windows: dict[str, int],
+    scaling_methods: list[str],
+    train_fraction: float,
+    timestamp_column: str = "date",
+) -> list[dict[str, Any]]:
+    transform_series = []
+
+    for id_key, dataset in datasets.items():
+        frame = build_forecasting_frame(dataset, id_key, target_column, timestamp_column)
+        granularity = id_key.rsplit("_", 1)[-1]
+        seconds_per_step = infer_seconds_per_step(dataset, timestamp_column)
+        frequency = str(pd.to_timedelta(seconds_per_step, unit="s"))
+
+        for scaling_method in scaling_methods:
+            scaled_frame, _ = build_scaled_target_frame(
+                frame,
+                train_fraction,
+                granularity,
+                target_column,
+                frequency,
+                scaling_method=scaling_method,
+            )
+            scaled_target = scaled_frame["y_scaled"]
+            transform_series.append(
+                _transform_record(
+                    id_key,
+                    granularity,
+                    "scaled_level",
+                    "none",
+                    1,
+                    scaled_frame["ds"],
+                    scaled_target,
+                    scaling_method=scaling_method,
+                )
+            )
+
+            for window_label, window_seconds in smoothing_windows.items():
+                window_steps = max(1, round(window_seconds / seconds_per_step))
+                if window_steps < 2:
+                    continue
+
+                smoothed = scaled_target.rolling(window=window_steps, min_periods=window_steps).mean()
+                transform_series.append(
+                    _transform_record(
+                        id_key,
+                        granularity,
+                        "scaled_trailing_rolling_mean",
+                        window_label,
+                        window_steps,
+                        scaled_frame["ds"],
+                        smoothed,
+                        scaling_method=scaling_method,
+                    )
+                )
+
+            transform_series.append(
+                _transform_record(
+                    id_key,
+                    granularity,
+                    "scaled_first_difference",
+                    "none",
+                    1,
+                    scaled_frame["ds"],
+                    scaled_target.diff(),
+                    scaling_method=scaling_method,
+                )
+            )
+            transform_series.append(
+                _transform_record(
+                    id_key,
+                    granularity,
+                    "scaled_second_difference",
+                    "none",
+                    1,
+                    scaled_frame["ds"],
+                    scaled_target.diff().diff(),
+                    scaling_method=scaling_method,
+                )
+            )
+
+    return transform_series
+
+
 def _transform_record(
     id_key: str,
     granularity: str,
@@ -293,6 +386,7 @@ def _transform_record(
     window_steps: int,
     dates: pd.Series,
     values: pd.Series,
+    scaling_method: str = "unscaled",
 ) -> dict[str, Any]:
     return {
         "id_key": id_key,
@@ -302,6 +396,7 @@ def _transform_record(
         "window_steps": window_steps,
         "dates": dates,
         "values": values,
+        "scaling_method": scaling_method,
     }
 
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import warnings
+from datetime import timedelta
 from pathlib import Path
+from time import perf_counter
 from typing import Any, TypedDict, cast
 
 import numpy as np
@@ -80,8 +82,8 @@ def run_univariate_analysis(
         )
     else:
         arima_results = {
-            "forecasts": pd.DataFrame(columns=["ds", "y", "forecast", "granularity"]),
-            "metrics": pd.DataFrame(columns=["granularity", "model", "mae", "rmse", "r2"]),
+            "arima_forecasts": pd.DataFrame(columns=["ds", "y", "forecast", "granularity"]),
+            "arima_metrics": pd.DataFrame(columns=["granularity", "model", "mae", "rmse", "r2"]),
         }
 
     candidate_specs, scaling_summary, mlp_window_summary = build_mlp_preparation_candidates(
@@ -110,9 +112,9 @@ def run_univariate_analysis(
         plots_dir / "test_comparison",
     )
     write_univariate_comparison_plots(
-        arima_metrics=arima_results["metrics"],
-        mlp_metrics=mlp_results["mlp_metrics"],
-        arima_forecasts=arima_results["forecasts"],
+        arima_metrics=arima_results["arima_metrics"],
+        mlp_test_comparison=mlp_results["mlp_test_comparison"],
+        arima_forecasts=arima_results["arima_forecasts"],
         mlp_forecasts=mlp_results["mlp_forecasts"],
         output_dir=plots_dir,
     )
@@ -181,15 +183,15 @@ def run_univariate_arima_forecasts(
 
     if not forecast_frames:
         return {
-            "forecasts": pd.DataFrame(columns=["ds", "y", "forecast"]),
-            "metrics": pd.DataFrame(columns=["granularity", "model", "mae", "rmse"]),
+            "arima_forecasts": pd.DataFrame(columns=["ds", "y", "forecast"]),
+            "arima_metrics": pd.DataFrame(columns=["granularity", "model", "mae", "rmse"]),
         }
 
     forecasts = pd.concat(forecast_frames, ignore_index=True)
     metrics = pd.DataFrame(metric_rows).sort_values(["granularity", "d"])
     if write_full_forecasts:
         write_csv_output(forecasts, output_dir / "arima_forecasts.csv")
-    return {"forecasts": forecasts, "metrics": metrics}
+    return {"arima_forecasts": forecasts, "arima_metrics": metrics}
 
 
 def build_mlp_preparation_candidates(
@@ -296,24 +298,59 @@ def run_mlp_test_comparison(
     mlp_config = analysis_policy.get("mlp", {})
     if not bool(mlp_config.get("enabled", False)) or not candidate_specs:
         return {
-            "mlp_metrics": pd.DataFrame(),
             "mlp_forecasts": pd.DataFrame(),
             "mlp_test_comparison": pd.DataFrame(),
-            "mlp_parameter_effects": pd.DataFrame(),
         }
 
     metric_rows = []
     test_forecasts = []
     learning_rates = mlp_config.get("learning_rate_grid", mlp_config.get("initial_learning_rate_grid", [0.001]))
+    candidate_specs = limit_sequence(candidate_specs, mlp_config.get("candidate_limit"))
+    learning_rates = limit_sequence([float(value) for value in learning_rates], mlp_config.get("learning_rate_limit"))
+    total_models = sum(
+        1
+        for candidate in candidate_specs
+        if not candidate["train_windows"]["x"].empty and not candidate["test_windows"]["x"].empty
+        for _ in learning_rates
+    )
+    completed_models = 0
+    run_started = perf_counter()
+    if total_models:
+        print(
+            "[MLP] Starting candidate review: "
+            f"{len(candidate_specs)} candidates, {len(learning_rates)} learning rates, {total_models} model fits. "
+            f"accelerator={mlp_config.get('accelerator', 'auto')} "
+            f"windows_batch_size={mlp_config.get('windows_batch_size', 1024)}",
+            flush=True,
+        )
 
-    for candidate in candidate_specs:
+    for candidate_index, candidate in enumerate(candidate_specs, start=1):
         train_windows = candidate["train_windows"]
         test_windows = candidate["test_windows"]
         if train_windows["x"].empty or test_windows["x"].empty:
+            print(
+                f"[MLP] Skipping candidate {candidate_index}/{len(candidate_specs)}: "
+                f"{candidate['candidate_label']} has empty train/test windows.",
+                flush=True,
+            )
             continue
 
         hidden_units = select_hidden_units(candidate["lookback_steps"], mlp_config)
-        for learning_rate_init in learning_rates:
+        print(
+            f"[MLP] Candidate {candidate_index}/{len(candidate_specs)}: "
+            f"{candidate['candidate_label']} | train_windows={len(train_windows['x'])} "
+            f"test_windows={len(test_windows['x'])} hidden_units={hidden_units}",
+            flush=True,
+        )
+        for learning_rate_index, learning_rate_init in enumerate(learning_rates, start=1):
+            model_started = perf_counter()
+            print(
+                f"[MLP] Training {completed_models + 1}/{total_models}: "
+                f"candidate={candidate['candidate_label']} "
+                f"lr={float(learning_rate_init):g} "
+                f"({learning_rate_index}/{len(learning_rates)} for candidate)",
+                flush=True,
+            )
             test_forecast, warning_messages = forecast_neural_mlp_candidate(
                 candidate=candidate,
                 hidden_units=hidden_units,
@@ -321,8 +358,25 @@ def run_mlp_test_comparison(
                 mlp_config=mlp_config,
             )
             if test_forecast.empty:
+                completed_models += 1
+                print(
+                    f"[MLP] Finished {completed_models}/{total_models}: no aligned forecasts produced.",
+                    flush=True,
+                )
                 continue
             test_metrics = forecast_metrics(test_forecast["y"], test_forecast["forecast"])
+            model_seconds = perf_counter() - model_started
+            completed_models += 1
+            elapsed_seconds = perf_counter() - run_started
+            average_seconds = elapsed_seconds / completed_models
+            remaining_seconds = max(total_models - completed_models, 0) * average_seconds
+            print(
+                f"[MLP] Finished {completed_models}/{total_models} in {format_duration(model_seconds)} | "
+                f"MAE={test_metrics['mae']:.4f} RMSE={test_metrics['rmse']:.4f} R2={test_metrics['r2']:.4f} | "
+                f"avg/model={format_duration(average_seconds)} ETA={format_duration(remaining_seconds)} | "
+                f"warnings={len(warning_messages)}",
+                flush=True,
+            )
             test_forecast["model"] = "NeuralForecast_MLP_target_lags"
             test_forecast["granularity"] = candidate["granularity"]
             test_forecast["split"] = "test"
@@ -353,6 +407,9 @@ def run_mlp_test_comparison(
                     "min_steps": int(mlp_config.get("min_steps", 5000)),
                     "max_steps": int(mlp_config.get("max_steps", 7500)),
                     "accelerator": str(mlp_config.get("accelerator", "auto")),
+                    "windows_batch_size": int(mlp_config.get("windows_batch_size", 1024)),
+                    "dataloader_num_workers": int(mlp_config.get("dataloader_num_workers", 0)),
+                    "training_seconds": model_seconds,
                     "warning_count": len(warning_messages),
                     "warnings": "; ".join(warning_messages),
                     **test_metrics,
@@ -362,22 +419,23 @@ def run_mlp_test_comparison(
     test_metrics_frame = pd.DataFrame(metric_rows)
     if test_metrics_frame.empty:
         return {
-            "mlp_metrics": pd.DataFrame(),
             "mlp_forecasts": pd.DataFrame(),
             "mlp_test_comparison": pd.DataFrame(),
-            "mlp_parameter_effects": pd.DataFrame(),
         }
 
     test_metrics_frame = test_metrics_frame.sort_values(
         ["granularity", "difference_order", "training_smoothing_window", "learning_rate_init"]
     ).reset_index(drop=True)
     test_metrics_frame["selection_mode"] = str(mlp_config.get("selection_mode", "test_comparison"))
+    print(
+        f"[MLP] Completed candidate review: {len(test_metrics_frame)} scored model fits "
+        f"in {format_duration(perf_counter() - run_started)}.",
+        flush=True,
+    )
 
     return {
-        "mlp_metrics": test_metrics_frame,
         "mlp_forecasts": pd.concat(test_forecasts, ignore_index=True),
         "mlp_test_comparison": test_metrics_frame.copy(),
-        "mlp_parameter_effects": test_metrics_frame.copy(),
     }
 
 
@@ -488,39 +546,68 @@ def forecast_neural_mlp_candidate(
 
     model_alias = f"MLP_lr_{format_learning_rate_alias(learning_rate_init)}"
     forecast_frame = prepared[["unique_id", "ds", "model_series"]].rename(columns={"model_series": "y"})
-    neural_model = NeuralForecastMLP(
-        h=int(candidate["horizon_steps"]),
-        input_size=int(candidate["lookback_steps"]),
-        num_layers=int(mlp_config.get("num_layers", 1)),
-        hidden_size=int(hidden_units),
-        max_steps=int(mlp_config.get("max_steps", 7500)),
-        learning_rate=float(learning_rate_init),
-        batch_size=int(mlp_config.get("batch_size", 1)),
-        windows_batch_size=int(mlp_config.get("windows_batch_size", 1024)),
-        inference_windows_batch_size=int(mlp_config.get("inference_windows_batch_size", -1)),
-        scaler_type=str(mlp_config.get("scaler_type", "identity")),
-        random_seed=int(mlp_config.get("random_state", 42)),
-        alias=model_alias,
-        min_steps=int(mlp_config.get("min_steps", 5000)),
-        accelerator=str(mlp_config.get("accelerator", "auto")),
-        devices=int(mlp_config.get("devices", 1)),
-        logger=False,
-        enable_checkpointing=False,
-        enable_model_summary=False,
-        enable_progress_bar=False,
-    )
+    dataloader_kwargs = {
+        "num_workers": int(mlp_config.get("dataloader_num_workers", 0)),
+        "pin_memory": bool(mlp_config.get("dataloader_pin_memory", False)),
+    }
+    model_kwargs: dict[str, Any] = {
+        "h": int(candidate["horizon_steps"]),
+        "input_size": int(candidate["lookback_steps"]),
+        "num_layers": int(mlp_config.get("num_layers", 1)),
+        "hidden_size": int(hidden_units),
+        "max_steps": int(mlp_config.get("max_steps", 7500)),
+        "learning_rate": float(learning_rate_init),
+        "batch_size": int(mlp_config.get("batch_size", 1)),
+        "windows_batch_size": int(mlp_config.get("windows_batch_size", 1024)),
+        "inference_windows_batch_size": int(mlp_config.get("inference_windows_batch_size", -1)),
+        "scaler_type": str(mlp_config.get("scaler_type", "identity")),
+        "random_seed": int(mlp_config.get("random_state", 42)),
+        "alias": model_alias,
+        "min_steps": int(mlp_config.get("min_steps", 5000)),
+        "accelerator": str(mlp_config.get("accelerator", "auto")),
+        "devices": int(mlp_config.get("devices", 1)),
+        "dataloader_kwargs": dataloader_kwargs,
+        "logger": False,
+        "enable_checkpointing": False,
+        "enable_model_summary": False,
+        "enable_progress_bar": False,
+    }
+    if "precision" in mlp_config:
+        model_kwargs["precision"] = mlp_config["precision"]
+    neural_model = NeuralForecastMLP(**model_kwargs)
     engine = NeuralForecast(models=[neural_model], freq=str(candidate["frequency"]))
     with warnings.catch_warnings(record=True) as caught_warnings:
         warnings.simplefilter("always")
-        cross_validation = engine.cross_validation(
-            df=forecast_frame,
-            n_windows=None,
-            val_size=0,
-            test_size=test_size,
-            step_size=1,
-            refit=False,
-            verbose=False,
-        )
+        try:
+            cross_validation = engine.cross_validation(
+                df=forecast_frame,
+                n_windows=None,
+                val_size=0,
+                test_size=test_size,
+                step_size=1,
+                refit=False,
+                verbose=False,
+            )
+        except PermissionError:
+            if int(mlp_config.get("dataloader_num_workers", 0)) <= 0:
+                raise
+            fallback_config = dict(mlp_config)
+            fallback_config["dataloader_num_workers"] = 0
+            print(
+                "[MLP] DataLoader workers failed with a Windows permission error; "
+                "retrying this model with dataloader_num_workers=0.",
+                flush=True,
+            )
+            fallback_forecast, fallback_warnings = forecast_neural_mlp_candidate(
+                candidate=candidate,
+                hidden_units=hidden_units,
+                learning_rate_init=learning_rate_init,
+                mlp_config=fallback_config,
+            )
+            return fallback_forecast, [
+                "DataLoader worker fallback used after Windows PermissionError.",
+                *fallback_warnings,
+            ]
     warnings_seen = sorted({str(item.message) for item in caught_warnings})
     return build_neural_mlp_test_forecast(
         cross_validation=cross_validation,
@@ -630,6 +717,19 @@ def select_hidden_units(lookback_steps: int, mlp_config: dict[str, Any]) -> int:
 
 def format_learning_rate_alias(learning_rate_init: float) -> str:
     return f"{learning_rate_init:g}".replace("-", "m").replace(".", "p")
+
+
+def limit_sequence(values: list[Any], configured_limit: Any) -> list[Any]:
+    if configured_limit is None:
+        return values
+    limit = int(configured_limit)
+    if limit <= 0:
+        return values
+    return values[:limit]
+
+
+def format_duration(seconds: float) -> str:
+    return str(timedelta(seconds=round(seconds)))
 
 
 def build_candidate_label(granularity: str, difference_order: int, smoothing_window: str) -> str:

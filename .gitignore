@@ -3,6 +3,9 @@
 __pycache__/
 .ipynb_checkpoints/
 
+# Local generated run archives.
+outputs/chinese_boiler_dataset/history/
+
 # Ignore all local datasets except the Chinese boiler dataset used by this repo.
 data/*
 !data/chinese_boiler_dataset/

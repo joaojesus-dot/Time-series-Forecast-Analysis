@@ -33,6 +33,23 @@
         "${workspaceFolder}/outputs",
         "--skip-forecasting"
       ]
+    },
+    {
+      "name": "Run forecasting smoke test",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/python_scripts/orchestrator.py",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "args": [
+        "--data-dir",
+        "${workspaceFolder}/data",
+        "--output-dir",
+        "${workspaceFolder}/outputs",
+        "--forecasting-smoke-test"
+      ]
     }
   ]
 }

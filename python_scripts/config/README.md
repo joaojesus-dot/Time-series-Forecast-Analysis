@@ -23,7 +23,8 @@
 - `experimental_protocol.train_only_smoothing_windows`: default smoothing windows applied to the MLP train split only.
 - `experimental_protocol.train_only_smoothing_windows_by_granularity`: per-granularity smoothing windows applied to the MLP train split only.
 - `experimental_protocol.splits`: chronological train and test fractions.
-- `experimental_protocol.scaling.method`: target scaling method fitted on the train split.
+- `experimental_protocol.scaling.method`: active target scaling method used by forecasting models.
+- `experimental_protocol.scaling.comparison_methods`: target scaling methods compared in pre-forecasting diagnostics.
 - `experimental_protocol.metrics`: metrics written to the comparison tables.
 - `experimental_protocol.supervised_window.input`: lag-window feature source for the MLP.
 - `experimental_protocol.supervised_window.target`: target position used when building each supervised window.
@@ -34,6 +35,7 @@
 - `run_tracking.tag`: short label appended to the run id.
 - `run_tracking.history_root`: folder that stores archived run snapshots.
 - `run_tracking.copy_plots`: copies forecasting plots into the archived run snapshot.
+  The history folder is ignored by Git and is intended to stay local.
 
 ## `univariate.arima`
 
@@ -56,11 +58,23 @@
 - `num_layers`: hidden-layer count; `1` follows the assignment's single-hidden-layer MLP.
 - `batch_size`: series batch size passed to NeuralForecast.
 - `windows_batch_size`: supervised-window batch size passed to NeuralForecast.
+- `dataloader_num_workers`: worker count for NeuralForecast/PyTorch dataloaders. The default is `0` on this Windows setup because worker multiprocessing raised permission errors during smoke testing.
+- `dataloader_pin_memory`: pins DataLoader memory when using GPU training.
 - `accelerator`: Lightning accelerator used by NeuralForecast, for example `gpu` or `cpu`.
 - `devices`: number of accelerator devices requested.
 - `random_state`: reproducibility seed passed to NeuralForecast MLP.
 - `selection_mode`: label used in reports for the current candidate comparison strategy.
+- `selected_candidate_combinations`: reduced candidate set chosen from chronological test-block review for the next project stage.
+- `candidate_limit`: optional runtime cap for smoke tests; `null` uses all candidates.
+- `learning_rate_limit`: optional runtime cap for smoke tests; `null` uses all learning rates.
 - `write_window_data`: reserved switch for writing raw window matrices in future revisions.
+
+## Runtime Arguments
+
+- `--skip-forecasting`: regenerates preprocessing artifacts without fitting forecasting models.
+- `--forecasting-smoke-test`: runs one candidate and one learning rate for one training step.
+- `--max-candidates`: limits MLP candidates for timing tests without editing JSON.
+- `--max-learning-rates`: limits learning-rate options for timing tests without editing JSON.
 
 ## `multivariate`
 

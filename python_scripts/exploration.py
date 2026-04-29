@@ -104,6 +104,7 @@ def summarize_target_transforms(
         summary["transform"] = item["transform"]
         summary["window"] = item["window"]
         summary["window_steps"] = item["window_steps"]
+        summary["scaling_method"] = item.get("scaling_method", "unscaled")
         rows.append(summary)
     return pd.DataFrame(rows)
 

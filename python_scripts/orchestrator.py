@@ -8,6 +8,7 @@ import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import pandas as pd
@@ -34,6 +35,7 @@ if __package__ in {None, ""}:
         build_feature_selection,
         build_feature_subset,
         build_granularity_versions,
+        build_scaled_target_transform_series,
         build_target_transform_series,
         load_repaired_boiler_frame,
     )
@@ -65,6 +67,7 @@ else:
         build_feature_selection,
         build_feature_subset,
         build_granularity_versions,
+        build_scaled_target_transform_series,
         build_target_transform_series,
         load_repaired_boiler_frame,
     )
@@ -85,6 +88,9 @@ def main() -> int:
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
     parser.add_argument("--skip-forecasting", action="store_true")
+    parser.add_argument("--forecasting-smoke-test", action="store_true")
+    parser.add_argument("--max-candidates", type=int, default=None)
+    parser.add_argument("--max-learning-rates", type=int, default=None)
     args = parser.parse_args()
 
     dataset_name = "chinese_boiler_dataset"
@@ -102,7 +108,7 @@ def main() -> int:
     forecasting_plots_output = plots_output / "forecasting"
     derived_data_output = args.data_dir / dataset_name / "derived"
 
-    prepare_output_tree(dataset_output, args.data_dir / dataset_name)
+    prepare_output_tree(dataset_output, args.data_dir / dataset_name, preserve_forecasting_outputs=args.skip_forecasting)
     for directory in [
         reports_output,
         tables_output,
@@ -121,6 +127,7 @@ def main() -> int:
     family_reduction_rows = json.loads((CONFIG_DIR / "boiler_family_reduction.json").read_text(encoding="utf-8"))
     preprocessing_config = json.loads((CONFIG_DIR / "boiler_preprocessing.json").read_text(encoding="utf-8"))
     forecasting_config = json.loads((CONFIG_DIR / "boiler_forecasting.json").read_text(encoding="utf-8"))
+    apply_forecasting_runtime_overrides(forecasting_config, args)
     history_root = dataset_output / str(forecasting_config.get("run_tracking", {}).get("history_root", "history"))
     plot_config = json.loads((CONFIG_DIR / "boiler_plot_specs.json").read_text(encoding="utf-8"))
     feature_selection = build_feature_selection(family_reduction_rows)
@@ -131,6 +138,16 @@ def main() -> int:
     resampling_policy = preprocessing_config["resampling_policy"]
     profiling_granularities = list(forecasting_config["experimental_protocol"].get("profiling_granularities", []))
     scaling_method = str(forecasting_config["experimental_protocol"]["scaling"]["method"])
+    scaling_methods = [
+        str(method)
+        for method in forecasting_config["experimental_protocol"]["scaling"].get(
+            "comparison_methods",
+            [scaling_method],
+        )
+    ]
+    if scaling_method not in scaling_methods:
+        scaling_methods.insert(0, scaling_method)
+    train_fraction = float(forecasting_config["experimental_protocol"]["splits"]["train"])
 
     # Load the dataset quality summary and the repaired working frame.
     quality_report = DATASET_ANALYZERS[dataset_name](args.data_dir / dataset_name)
@@ -168,6 +185,15 @@ def main() -> int:
     # Build the cached target transforms used by the preparation summaries and plots.
     transform_series = build_target_transform_series(subset_b_datasets, target_column, plot_config["smoothing_windows"])
     smoothing_summary = summarize_target_transforms(transform_series, target_column)
+    scaling_series = build_scaled_target_transform_series(
+        subset_b_datasets,
+        target_column,
+        plot_config["smoothing_windows"],
+        scaling_methods,
+        train_fraction,
+        timestamp_column=str(resampling_policy["timestamp_column"]),
+    )
+    scaling_comparison_summary = summarize_target_transforms(scaling_series, target_column)
     autocorrelation_summary = build_target_autocorrelation_summary(
         profiling_datasets,
         target_column,
@@ -183,6 +209,7 @@ def main() -> int:
             "granularity": granularity_summary,
             "target_distribution": distribution_summary[distribution_summary["variable"] == target_column],
             "target_transforms": smoothing_summary,
+            "target_scaling_comparison": scaling_comparison_summary,
             "target_autocorrelation": autocorrelation_summary,
             "target_stationarity": stationarity_summary,
             "target_correlations": correlation_summary,
@@ -193,6 +220,7 @@ def main() -> int:
         "repaired": repaired,
         "subset_C": subset_c_base,
         "smoothing_summary": smoothing_summary,
+        "scaling_summary": scaling_comparison_summary,
         **subset_b_datasets,
     }
     output_dirs = {
@@ -206,6 +234,7 @@ def main() -> int:
             target_column,
             subset_b_datasets,
             transform_series,
+            scaling_series,
             output_dirs,
         ),
         frames,
@@ -227,9 +256,11 @@ def main() -> int:
         quality_summary=quality_summary,
         resampling_policy=resampling_policy,
         scaling_method=scaling_method,
+        scaling_methods=scaling_methods,
         granularity_summary=granularity_summary,
         distribution_summary=distribution_summary,
         smoothing_summary=smoothing_summary,
+        scaling_summary=scaling_comparison_summary,
         autocorrelation_summary=autocorrelation_summary,
         stationarity_summary=stationarity_summary,
         correlation_summary=correlation_summary,
@@ -242,6 +273,8 @@ def main() -> int:
             resampling_policy=resampling_policy,
         )
         run_metadata = build_run_metadata(forecasting_config)
+        run_metadata["started_at"] = datetime.now().isoformat(timespec="seconds")
+        run_started = perf_counter()
         forecasting_results = run_forecasting_pipeline(
             datasets=subset_b_datasets,
             target_column=target_column,
@@ -258,6 +291,11 @@ def main() -> int:
             "model_comparison": build_forecasting_comparison_frame(forecasting_results),
             "model_catalog": build_forecasting_model_catalog(forecasting_results),
         }
+        run_metadata["finished_at"] = datetime.now().isoformat(timespec="seconds")
+        run_metadata["duration_seconds"] = f"{perf_counter() - run_started:.3f}"
+        run_metadata["trained_model_count"] = str(
+            len(forecasting_results.get("univariate", {}).get("mlp_test_comparison", pd.DataFrame()))
+        )
         write_forecasting_summary_tables(tables_output / "forecasting_summary", forecasting_results)
         write_forecasting_report_suite(
             reports_dir=forecasting_reports_output,
@@ -279,14 +317,28 @@ def main() -> int:
     return 0
 
 
-def prepare_output_tree(dataset_output: Path, dataset_data_dir: Path) -> None:
+def apply_forecasting_runtime_overrides(forecasting_config: dict[str, Any], args: argparse.Namespace) -> None:
+    mlp_config = forecasting_config.setdefault("univariate", {}).setdefault("mlp", {})
+    if args.forecasting_smoke_test:
+        mlp_config["candidate_limit"] = 1
+        mlp_config["learning_rate_limit"] = 1
+        mlp_config["min_steps"] = 1
+        mlp_config["max_steps"] = 1
+        forecasting_config.setdefault("run_tracking", {})["tag"] = "smoke-test"
+    if args.max_candidates is not None:
+        mlp_config["candidate_limit"] = args.max_candidates
+    if args.max_learning_rates is not None:
+        mlp_config["learning_rate_limit"] = args.max_learning_rates
+
+
+def prepare_output_tree(
+    dataset_output: Path,
+    dataset_data_dir: Path,
+    preserve_forecasting_outputs: bool = False,
+) -> None:
     """Remove obsolete generated folders from the previous output layout."""
     obsolete_paths = [
         dataset_output / "data",
-        dataset_output / "forecasting",
-        dataset_output / "plots",
-        dataset_output / "reports",
-        dataset_output / "tables",
         dataset_output / "data_quality.md",
         dataset_output / "distribution_analysis.md",
         dataset_output / "exploration_findings.md",
@@ -302,6 +354,15 @@ def prepare_output_tree(dataset_output: Path, dataset_data_dir: Path) -> None:
         dataset_data_dir / "derived",
         dataset_data_dir / "feature_selection_note.json",
     ]
+    if not preserve_forecasting_outputs:
+        obsolete_paths.extend(
+            [
+                dataset_output / "forecasting",
+                dataset_output / "plots",
+                dataset_output / "reports",
+                dataset_output / "tables",
+            ]
+        )
     for path in obsolete_paths:
         remove_generated_path(path, dataset_output, dataset_data_dir)
 
@@ -348,17 +409,38 @@ def write_forecasting_summary_tables(
     forecasting_results: dict[str, dict[str, pd.DataFrame]],
 ) -> None:
     """Write the compact forecasting summary tables used in the reports."""
+    prune_stale_forecasting_summary_tables(output_dir)
     tables = {}
     for analysis_name, result_frames in forecasting_results.items():
         for frame_name, frame in result_frames.items():
-            if frame_name in {"forecasts", "mlp_forecasts", "scaled_target"} or frame.empty:
+            if frame_name in {
+                "forecasts",
+                "arima_forecasts",
+                "mlp_forecasts",
+                "scaled_target",
+                "mlp_metrics",
+                "mlp_parameter_effects",
+            }:
+                continue
+            if frame.empty:
                 continue
             table_name = f"{analysis_name}_{frame_name}"
-            if analysis_name == "univariate" and frame_name == "metrics":
-                table_name = "univariate_arima_metrics"
             tables[table_name] = frame
     if tables:
         write_table_bundle(output_dir, tables)
+
+
+def prune_stale_forecasting_summary_tables(output_dir: Path) -> None:
+    stale_files = [
+        "univariate_mlp_metrics.csv",
+        "univariate_mlp_parameter_effects.csv",
+        "univariate_mlp_preparation_selection.csv",
+        "univariate_metrics.csv",
+    ]
+    for filename in stale_files:
+        path = output_dir / filename
+        if path.exists():
+            path.unlink()
 
 
 def build_boiler_plot_specs(
@@ -366,12 +448,13 @@ def build_boiler_plot_specs(
     target_column: str,
     subset_b_datasets: dict[str, Any],
     transform_series: list[dict[str, Any]],
+    scaling_series: list[dict[str, Any]],
     output_dirs: dict[str, Path],
 ) -> list[dict[str, Any]]:
     # Resolve the dataset keys, target column, transforms, and output paths used by each plot spec.
     dataset_keys = list(subset_b_datasets)
     return [
-        _resolve_plot_spec(spec, plot_config, target_column, dataset_keys, transform_series, output_dirs)
+        _resolve_plot_spec(spec, plot_config, target_column, dataset_keys, transform_series, scaling_series, output_dirs)
         for spec in plot_config["plot_specs"]
     ]
 
@@ -382,6 +465,7 @@ def _resolve_plot_spec(
     target_column: str,
     dataset_keys: list[str],
     transform_series: list[dict[str, Any]],
+    scaling_series: list[dict[str, Any]],
     output_dirs: dict[str, Path],
 ) -> dict[str, Any]:
     resolved = dict(spec)
@@ -396,6 +480,8 @@ def _resolve_plot_spec(
         resolved["target_column"] = target_column
     if resolved.pop("transform_series_ref", False):
         resolved["transform_series"] = transform_series
+    if resolved.pop("scaling_series_ref", False):
+        resolved["scaling_series"] = scaling_series
 
     output_dir_ref = resolved.pop("output_dir_ref", None)
     if output_dir_ref:
@@ -503,7 +589,7 @@ def write_run_history_tables(
     upsert_history_table(
         history_tables_dir / "model_runs.csv",
         comparison_with_run,
-        key_columns=["run_id", "model_key", "split", "granularity"],
+        key_columns=["run_id", "model_key", "split", "granularity", "configuration"],
     )
     upsert_history_table(
         history_tables_dir / "run_catalog.csv",
