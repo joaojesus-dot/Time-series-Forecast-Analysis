@@ -1,5 +1,0 @@
-granularity,input_frequency,model_family,status,feature_source,target_source,lookback_steps,horizon_steps,lookback_duration,horizon_duration,train_rows,validation_rows,test_rows,train_windows,validation_windows,test_windows,write_window_data
-raw,5s,MLP,windows_prepared,scaled target lags only,scaled future target,120,120,10min,10min,60479,8641,17280,60240,8402,17041,False
-30s,30s,MLP,windows_prepared,scaled target lags only,scaled future target,20,20,10min,10min,10080,1439,2881,10041,1400,2842,False
-1min,1min,MLP,windows_prepared,scaled target lags only,scaled future target,10,10,10min,10min,5040,719,1441,5021,700,1422,False
-5min,5min,MLP,windows_prepared,scaled target lags only,scaled future target,2,2,10min,10min,1007,145,288,1004,142,285,False

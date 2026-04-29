@@ -1,5 +1,0 @@
-model,split,granularity,candidate_label,difference_order,transform_name,training_smoothing_window,lookback_steps,horizon_steps,lookback_duration,horizon_duration,hidden_units,learning_rate_init,warning_count,warnings,mae,rmse,mape,smape,bias
-MLP_target_lags,validation,1min,1min_d1_smooth_1min,1,first_difference,1min,10,10,10min,10min,10,0.01,0,,2.031799419498208,2.5760671780332443,0.26392395287380627,0.2639429565386179,-0.009806050738382267
-MLP_target_lags,test,1min,1min_d1_smooth_1min,1,first_difference,1min,10,10,10min,10min,10,0.01,0,,2.136909542651629,2.6930024969565394,0.27465110523235614,0.27463913867301787,0.02725011479444564
-MLP_target_lags,validation,30s,30s_d1_smooth_30s,1,first_difference,30s,20,20,10min,10min,20,0.01,0,,1.2283928073528299,1.5496610661351558,0.15961291138555497,0.15962166865566804,-0.009356546229603784
-MLP_target_lags,test,30s,30s_d1_smooth_30s,1,first_difference,30s,20,20,10min,10min,20,0.01,0,,1.2308213144615572,1.5538613797596919,0.15814040404007657,0.1581374855991261,0.0031961668436408974
