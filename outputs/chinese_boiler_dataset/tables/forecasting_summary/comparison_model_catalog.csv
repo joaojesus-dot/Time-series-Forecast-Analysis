@@ -1,2 +1,0 @@
-model_key,model_label,status,granularity_count,report_path
-univariate_mlp_target_lags,Univariate MLP Target Lags,evaluated,3,models/univariate_mlp_target_lags.md

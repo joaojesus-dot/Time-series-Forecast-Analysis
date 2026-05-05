@@ -569,6 +569,7 @@ def build_candidate_selection_markdown(
     mlp_test_comparison: pd.DataFrame,
 ) -> str:
     protocol = forecasting_policy["experimental_protocol"]
+    horizon = str(protocol["forecast_horizon"])
     mlp_config = forecasting_policy.get("univariate", {}).get("mlp", {})
     selected_config = list(mlp_config.get("selected_candidate_combinations", []))
     selected_rows = match_selected_candidate_rows(mlp_test_comparison, selected_config)
@@ -619,10 +620,10 @@ def build_candidate_selection_markdown(
             dataframe_to_markdown(selected_rows, selected_table_columns),
             "",
             "## Metric Evidence",
-            "- The selected combinations keep the best two candidates per granularity so the next stage can compare raw, 30s, and 1min behavior without mixing unequal one-step horizons into a single final decision.",
+            "- The selected combinations keep the best candidates per granularity so later stages can compare raw, 30s, and 1min behavior without mixing unequal one-step horizons into a single final decision.",
             "- All selected candidates use `standard` scaling, matching the preprocessing recommendation.",
-            "- No selected candidate uses train-only smoothing because smoothing consistently worsened one-step test metrics.",
-            "- `0.0001` is retained as the main learning rate because it produced the best candidate in each granularity; `0.001` and `0.01` are retained only where they won a level-transformed alternative.",
+            "- Smoothing candidates are optional preprocessing alternatives; when included, they should be compared against the no-smoothing candidates for the same granularity.",
+            "- Learning rate is treated as an MLP hyperparameter, not as part of the preprocessing candidate identity; selected rows below show the best observed LR only as supporting evidence.",
             "",
             "## Best Three Per Granularity",
             dataframe_to_markdown(
@@ -659,10 +660,28 @@ def build_candidate_selection_markdown(
             "",
             "## Next Stage",
             "- Use the selected combinations as the reduced candidate set for the next forecasting stage.",
-            "- The final project objective still requires a `10min` horizon run. At that stage, raw, 30s, and 1min will correspond to 120, 20, and 10 forecast steps respectively.",
-            "- These one-step results justify preprocessing and candidate reduction; they should not be presented as the final 10-minute forecasting result.",
+            f"- The project-objective horizon is `{horizon}`. {forecast_horizon_step_summary(horizon)}",
+            f"- One-step results justify preprocessing and candidate reduction; they should not be presented as the final `{horizon}` forecasting result.",
         ]
     )
+
+
+def forecast_horizon_step_summary(horizon: str) -> str:
+    if horizon == "1step":
+        return "It is one row ahead at each granularity."
+    try:
+        horizon_seconds = pd.Timedelta(horizon).total_seconds()
+    except ValueError:
+        return "Forecast steps depend on each granularity's sampling cadence."
+    cadence_seconds = {"raw": 5.0, "30s": 30.0, "1min": 60.0}
+    step_parts = [
+        f"{granularity}={int(horizon_seconds / cadence)}"
+        for granularity, cadence in cadence_seconds.items()
+        if horizon_seconds >= cadence and horizon_seconds % cadence == 0
+    ]
+    if not step_parts:
+        return "Forecast steps depend on each granularity's sampling cadence."
+    return f"At that horizon, forecast steps are: {', '.join(step_parts)}."
 
 
 def match_selected_candidate_rows(
@@ -675,8 +694,11 @@ def match_selected_candidate_rows(
             (mlp_test_comparison["granularity"] == selected["granularity"])
             & (mlp_test_comparison["difference_order"].astype(int) == int(selected["difference_order"]))
             & (mlp_test_comparison["training_smoothing_window"] == selected["training_smoothing_window"])
-            & (mlp_test_comparison["learning_rate_init"].astype(float) == float(selected["learning_rate_init"]))
         )
+        if "learning_rate_init" in selected:
+            mask = mask & (
+                mlp_test_comparison["learning_rate_init"].astype(float) == float(selected["learning_rate_init"])
+            )
         matched = mlp_test_comparison[mask].copy()
         if matched.empty:
             rows.append({**selected, "candidate_label": "", "mae": float("nan"), "rmse": float("nan"), "r2": float("nan")})
