@@ -3,8 +3,14 @@
 __pycache__/
 .ipynb_checkpoints/
 
-# Local generated run archives.
-outputs/chinese_boiler_dataset/history/
+# Local run archives.
+outputs/**/history/
+
+# Local legacy snapshots kept only for manual review after output-tree migrations.
+outputs/**/legacy/
+
+# Raw model-training traces; plots derived from these can be committed.
+outputs/**/training_results/
 
 # Ignore all local datasets except the Chinese boiler dataset used by this repo.
 data/*

@@ -69,6 +69,9 @@ def run_forecasting_pipeline(
     multivariate_policy = forecasting_policy.get("multivariate", {})
 
     if bool(univariate_policy.get("enabled", True)):
+        model_specific_stage = is_model_specific_stage(forecasting_policy)
+        univariate_output_dir = output_dir if model_specific_stage else output_dir / "univariate"
+        univariate_plots_dir = plots_dir if model_specific_stage else plots_dir / "univariate"
         results["univariate"] = run_univariate_analysis(
             datasets=datasets,
             target_column=target_column,
@@ -76,9 +79,9 @@ def run_forecasting_pipeline(
             resampling_policy=resampling_policy,
             forecasting_policy=forecasting_policy,
             analysis_policy=univariate_policy,
-            output_dir=output_dir / "univariate",
+            output_dir=univariate_output_dir,
             reports_dir=reports_dir,
-            plots_dir=plots_dir / "univariate",
+            plots_dir=univariate_plots_dir,
             derived_data_dir=derived_data_dir,
             timestamp_column=timestamp_column,
         )
@@ -98,6 +101,11 @@ def run_forecasting_pipeline(
         )
 
     return results
+
+
+def is_model_specific_stage(forecasting_policy: dict[str, Any]) -> bool:
+    stage_name = str(forecasting_policy.get("active_stage", "")).strip()
+    return stage_name.startswith("stage_3_univariate_")
 
 
 def prune_forecasting_outputs(output_dir: Path) -> None:

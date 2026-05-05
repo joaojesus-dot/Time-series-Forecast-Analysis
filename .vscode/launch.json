@@ -2,54 +2,196 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run orchestrator",
+      "name": "Stage 0 - Preprocessing",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/python_scripts/orchestrator.py",
-      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "program": "${workspaceFolder}\\python_scripts\\orchestrator.py",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
+      "redirectOutput": true,
       "justMyCode": true,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "MPLBACKEND": "Agg",
+        "PYTHONPATH": "${workspaceFolder}\\python_scripts"
+      },
       "args": [
         "--data-dir",
-        "${workspaceFolder}/data",
+        "${workspaceFolder}\\data",
         "--output-dir",
-        "${workspaceFolder}/outputs"
-      ]
-    },
-    {
-      "name": "Run orchestrator without forecasting",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/python_scripts/orchestrator.py",
-      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "justMyCode": true,
-      "args": [
-        "--data-dir",
-        "${workspaceFolder}/data",
-        "--output-dir",
-        "${workspaceFolder}/outputs",
+        "${workspaceFolder}\\outputs",
         "--skip-forecasting"
       ]
     },
     {
-      "name": "Run forecasting smoke test",
+      "name": "Stage 1 - MLP Screening 1step",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/python_scripts/orchestrator.py",
-      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "program": "${workspaceFolder}\\python_scripts\\orchestrator.py",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
+      "redirectOutput": true,
       "justMyCode": true,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "MPLBACKEND": "Agg",
+        "PYTHONPATH": "${workspaceFolder}\\python_scripts"
+      },
       "args": [
         "--data-dir",
-        "${workspaceFolder}/data",
+        "${workspaceFolder}\\data",
         "--output-dir",
-        "${workspaceFolder}/outputs",
+        "${workspaceFolder}\\outputs",
+        "--forecasting-from-derived",
+        "--forecasting-stage",
+        "stage_1_mlp_screening_1step"
+      ]
+    },
+    {
+      "name": "Stage 2 - Baseline MLP 1step Top3",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\python_scripts\\orchestrator.py",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "redirectOutput": true,
+      "justMyCode": true,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "MPLBACKEND": "Agg",
+        "PYTHONPATH": "${workspaceFolder}\\python_scripts"
+      },
+      "args": [
+        "--data-dir",
+        "${workspaceFolder}\\data",
+        "--output-dir",
+        "${workspaceFolder}\\outputs",
+        "--forecasting-from-derived",
+        "--forecasting-stage",
+        "stage_2_baseline_1step_top3"
+      ]
+    },
+    {
+      "name": "Stage 2 - Baseline MLP 3min Top3",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\python_scripts\\orchestrator.py",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "redirectOutput": true,
+      "justMyCode": true,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "MPLBACKEND": "Agg",
+        "PYTHONPATH": "${workspaceFolder}\\python_scripts"
+      },
+      "args": [
+        "--data-dir",
+        "${workspaceFolder}\\data",
+        "--output-dir",
+        "${workspaceFolder}\\outputs",
+        "--forecasting-from-derived",
+        "--forecasting-stage",
+        "stage_2_baseline_3min_top3"
+      ]
+    },
+    {
+      "name": "Stage 2 - Compare Horizon Impact",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\python_scripts\\plots.py",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "redirectOutput": true,
+      "justMyCode": true,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "MPLBACKEND": "Agg",
+        "PYTHONPATH": "${workspaceFolder}\\python_scripts"
+      },
+      "args": [
+        "--compare-archived-stages",
+        "--stage-a-run",
+        "${input:stage2OneStepRun}",
+        "--stage-a-label",
+        "Stage 2 - 1step baseline MLP",
+        "--stage-b-run",
+        "${input:stage2ThreeMinuteRun}",
+        "--stage-b-label",
+        "Stage 2 - 3min baseline MLP",
+        "--output-dir",
+        "${workspaceFolder}\\outputs\\chinese_boiler_dataset\\current\\stage_2_horizon_impact\\comparison"
+      ]
+    },
+    {
+      "name": "Stage 3 - Univariate MLP 3min",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\python_scripts\\orchestrator.py",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "redirectOutput": true,
+      "justMyCode": true,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "MPLBACKEND": "Agg",
+        "PYTHONPATH": "${workspaceFolder}\\python_scripts"
+      },
+      "args": [
+        "--data-dir",
+        "${workspaceFolder}\\data",
+        "--output-dir",
+        "${workspaceFolder}\\outputs",
+        "--forecasting-from-derived",
+        "--forecasting-stage",
+        "stage_3_univariate_mlp_3min"
+      ]
+    },
+    {
+      "name": "Smoke Test - Forecasting",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\python_scripts\\orchestrator.py",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "redirectOutput": true,
+      "justMyCode": true,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "MPLBACKEND": "Agg",
+        "PYTHONPATH": "${workspaceFolder}\\python_scripts"
+      },
+      "args": [
+        "--data-dir",
+        "${workspaceFolder}\\data",
+        "--output-dir",
+        "${workspaceFolder}\\outputs",
+        "--forecasting-from-derived",
+        "--forecasting-stage",
+        "stage_1_mlp_screening_1step",
         "--forecasting-smoke-test"
       ]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "stage2OneStepRun",
+      "type": "promptString",
+      "description": "Path to archived Stage 2 1step run folder",
+      "default": "${workspaceFolder}\\outputs\\chinese_boiler_dataset\\history\\PASTE_1STEP_RUN_FOLDER"
+    },
+    {
+      "id": "stage2ThreeMinuteRun",
+      "type": "promptString",
+      "description": "Path to archived Stage 2 3min run folder",
+      "default": "${workspaceFolder}\\outputs\\chinese_boiler_dataset\\history\\PASTE_3MIN_RUN_FOLDER"
     }
   ]
 }

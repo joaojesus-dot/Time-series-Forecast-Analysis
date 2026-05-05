@@ -1,0 +1,4 @@
+model_key,model_label,split,granularity,mae,rmse,mape,smape,bias,r2,configuration,mae_rank
+univariate_mlp_target_lags,Univariate MLP Target Lags,test,1min,0.14093015607849738,0.17710153786643124,194.2699421118383,38.353160713902454,0.00046281310221127597,0.9595621361173672,first_difference | smooth=none | lr=0.0001,1.0
+univariate_mlp_target_lags,Univariate MLP Target Lags,test,30s,0.09975835137933316,0.1261754697534369,74.35736380402402,31.04826720290596,-0.0006596129473439128,0.9795626577505733,level | smooth=none | lr=0.0001,1.0
+univariate_mlp_target_lags,Univariate MLP Target Lags,test,raw,0.009591117649089346,0.012083259612504015,7.6376723364548145,4.856882228210967,-0.00011058926119251371,0.9998129551128938,first_difference | smooth=none | lr=0.0001,1.0

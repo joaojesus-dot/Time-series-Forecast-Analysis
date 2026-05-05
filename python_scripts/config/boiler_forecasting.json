@@ -1,9 +1,272 @@
 {
+  "active_stage": "stage_1_mlp_screening_1step",
+  "stages": {
+    "stage_1_mlp_screening_1step": {
+      "description": "Stage 1: assignment-style MLP screening over all preprocessing candidates and all learning rates at a one-step forecast horizon.",
+      "forecast_horizon": "1step",
+      "selection_mode": "stage_1_mlp_screening_1step",
+      "use_selected_candidate_combinations": false,
+      "run_tracking_tag": "stage-1-mlp-screening-1step"
+    },
+    "stage_2_baseline_1step_top3": {
+      "description": "Stage 2 baseline: one-hidden-layer MLP on the best preprocessing candidate per granularity at a one-step horizon.",
+      "forecast_horizon": "1step",
+      "selection_mode": "stage_2_baseline_1step_top3",
+      "use_selected_candidate_combinations": true,
+      "candidate_selection": "candidate_per_granularity",
+      "run_tracking_tag": "stage-2-baseline-1step-top3",
+      "mlp_settings": {
+        "enabled": true,
+        "best_learning_rate_init": 0.0001,
+        "learning_rate_grid": [0.0001],
+        "use_selected_learning_rates": false,
+        "model_variants": [
+          {
+            "name": "neuralforecast_single_hidden_match_lookback",
+            "engine": "neuralforecast",
+            "num_layers": 1,
+            "hidden_units_strategy": "match_lookback"
+          }
+        ]
+      },
+      "arima_settings": {
+        "enabled": false
+      },
+      "exponential_smoothing_settings": {
+        "enabled": false
+      }
+    },
+    "stage_2_baseline_3min_top3": {
+      "description": "Stage 2 baseline: same top-three MLP candidates evaluated at the project 3-minute forecast horizon.",
+      "forecast_horizon": "3min",
+      "selection_mode": "stage_2_baseline_3min_top3",
+      "use_selected_candidate_combinations": true,
+      "candidate_selection": "candidate_per_granularity",
+      "run_tracking_tag": "stage-2-baseline-3min-top3",
+      "mlp_settings": {
+        "enabled": true,
+        "best_learning_rate_init": 0.0001,
+        "learning_rate_grid": [0.0001],
+        "use_selected_learning_rates": false,
+        "model_variants": [
+          {
+            "name": "neuralforecast_single_hidden_match_lookback",
+            "engine": "neuralforecast",
+            "num_layers": 1,
+            "hidden_units_strategy": "match_lookback"
+          }
+        ]
+      },
+      "arima_settings": {
+        "enabled": false
+      },
+      "exponential_smoothing_settings": {
+        "enabled": false
+      }
+    },
+    "stage_3_univariate_mlp_3min": {
+      "description": "Stage 3 univariate MLP: advanced NeuralForecast MLP architecture comparison at the project 3-minute horizon.",
+      "runnable": true,
+      "forecast_horizon": "3min",
+      "selection_mode": "stage_3_univariate_mlp_3min",
+      "use_selected_candidate_combinations": true,
+      "candidate_selection": "candidate_per_granularity",
+      "run_tracking_tag": "stage-3-univariate-mlp-3min",
+      "mlp_settings": {
+        "enabled": true,
+        "learning_rate_grid": [0.0001],
+        "use_selected_learning_rates": false,
+        "candidate_settings": {
+          "raw_d1_smooth_none": {
+            "learning_rate_init": 0.0001,
+            "min_steps": 5000,
+            "max_steps": 5000
+          },
+          "30s_d0_smooth_none": {
+            "learning_rate_init": 0.01,
+            "min_steps": 5000,
+            "max_steps": 12000
+          },
+          "1min_d1_smooth_none": {
+            "learning_rate_init": 0.01,
+            "min_steps": 5000,
+            "max_steps": 5000
+          }
+        },
+        "model_variants": [
+          {
+            "name": "neuralforecast_2_hidden_match_lookback",
+            "engine": "neuralforecast",
+            "num_layers": 2,
+            "hidden_units_strategy": "match_lookback"
+          },
+          {
+            "name": "neuralforecast_2_hidden_fixed_16",
+            "engine": "neuralforecast",
+            "num_layers": 2,
+            "hidden_units_strategy": "fixed",
+            "hidden_units": 16
+          }
+        ]
+      },
+      "arima_settings": {
+        "enabled": false
+      },
+      "exponential_smoothing_settings": {
+        "enabled": false
+      }
+    },
+    "stage_3_univariate_arima_3min": {
+      "description": "Future Stage 3 placeholder: ARIMA grid at the project 3-minute horizon. Candidate pool and order grid must be reviewed before this stage is enabled.",
+      "runnable": false,
+      "forecast_horizon": "3min",
+      "selection_mode": "stage_3_univariate_arima_3min",
+      "use_selected_candidate_combinations": true,
+      "candidate_selection": "stage_3_candidate_pool_pending_review",
+      "run_tracking_tag": "stage-3-arima-3min",
+      "mlp_settings": {
+        "enabled": false
+      },
+      "arima_settings": {
+        "enabled": true,
+        "p_q_values_by_granularity": {
+          "raw": [5, 15, 30],
+          "30s": [10, 20, 30],
+          "1min": [5, 10, 15]
+        },
+        "d_values_by_granularity": {
+          "raw": [1, 2],
+          "30s": [0, 1],
+          "1min": [0, 1]
+        }
+      },
+      "exponential_smoothing_settings": {
+        "enabled": false
+      }
+    },
+    "stage_3_univariate_exponential_smoothing_3min": {
+      "description": "Future Stage 3 placeholder: non-seasonal exponential-smoothing variants at the project 3-minute horizon. Candidate pool and smoothing variants must be reviewed before this stage is enabled.",
+      "runnable": false,
+      "forecast_horizon": "3min",
+      "selection_mode": "stage_3_univariate_exponential_smoothing_3min",
+      "use_selected_candidate_combinations": true,
+      "candidate_selection": "stage_3_candidate_pool_pending_review",
+      "run_tracking_tag": "stage-3-exponential-smoothing-3min",
+      "mlp_settings": {
+        "enabled": false
+      },
+      "arima_settings": {
+        "enabled": false
+      },
+      "exponential_smoothing_settings": {
+        "enabled": true,
+        "variants": [
+          {"name": "ses_level", "model": "simple"},
+          {"name": "holt_trend", "model": "holt"},
+          {"name": "auto_ets_nonseasonal", "model": "auto_ets", "ets_model": "ZZN"}
+        ]
+      }
+    }
+  },
+  "candidate_selections": {
+    "candidate_per_granularity": [
+      {
+        "granularity": "raw",
+        "difference_order": 1,
+        "transform_name": "first_difference",
+        "training_smoothing_window": "none",
+        "role": "best_project_horizon_raw_candidate"
+      },
+      {
+        "granularity": "30s",
+        "difference_order": 0,
+        "transform_name": "level",
+        "training_smoothing_window": "none",
+        "role": "best_project_horizon_30s_candidate"
+      },
+      {
+        "granularity": "1min",
+        "difference_order": 1,
+        "transform_name": "first_difference",
+        "training_smoothing_window": "none",
+        "role": "best_project_horizon_1min_candidate"
+      }
+    ],
+    "stage_3_candidate_pool_pending_review": [
+      {
+        "granularity": "raw",
+        "difference_order": 1,
+        "transform_name": "first_difference",
+        "training_smoothing_window": "none",
+        "role": "best_short_horizon_baseline"
+      },
+      {
+        "granularity": "raw",
+        "difference_order": 2,
+        "transform_name": "second_difference",
+        "training_smoothing_window": "none",
+        "role": "raw_stationary_alternative"
+      },
+      {
+        "granularity": "30s",
+        "difference_order": 1,
+        "transform_name": "first_difference",
+        "training_smoothing_window": "none",
+        "role": "best_mid_granularity_candidate"
+      },
+      {
+        "granularity": "30s",
+        "difference_order": 0,
+        "transform_name": "level",
+        "training_smoothing_window": "none",
+        "role": "30s_level_alternative"
+      },
+      {
+        "granularity": "1min",
+        "difference_order": 1,
+        "transform_name": "first_difference",
+        "training_smoothing_window": "none",
+        "role": "best_coarse_granularity_candidate"
+      },
+      {
+        "granularity": "1min",
+        "difference_order": 0,
+        "transform_name": "level",
+        "training_smoothing_window": "none",
+        "role": "1min_level_alternative"
+      },
+      {
+        "granularity": "raw",
+        "difference_order": 1,
+        "transform_name": "first_difference",
+        "training_smoothing_window": "30s",
+        "role": "best_raw_smoothing_candidate"
+      },
+      {
+        "granularity": "30s",
+        "difference_order": 0,
+        "transform_name": "level",
+        "training_smoothing_window": "1min",
+        "role": "best_30s_smoothing_candidate"
+      },
+      {
+        "granularity": "1min",
+        "difference_order": 0,
+        "transform_name": "level",
+        "training_smoothing_window": "2min",
+        "role": "best_1min_smoothing_candidate"
+      }
+    ]
+  },
+  "candidate_selection_notes": {
+    "candidate_per_granularity": "Reviewed top-three candidate list used for Stage 2 horizon-impact baselines. It contains one selected preprocessing candidate per granularity: raw d1 no smoothing, 30s d0 no smoothing as the simpler near-tie candidate, and 1min d1 no smoothing as the Stage 1 winner.",
+    "stage_3_candidate_pool_pending_review": "Pending-review top-tier candidate pool carried forward from earlier exploratory model work. Before Stage 3 is enabled, this list must be re-analysed against the final 3-minute objective and either reduced, confirmed, or replaced."
+  },
   "experimental_protocol": {
     "dataset_prefix": "subset_B",
     "target_granularities": ["raw", "30s", "1min"],
     "forecast_horizon": "1step",
-    "lookback_window": "10min",
+    "lookback_window": "3min",
     "profiling_granularities": ["raw", "30s", "1min"],
     "differentiation_orders": [0, 1, 2],
     "train_only_smoothing_windows": ["none"],
@@ -28,23 +291,35 @@
       "allow_split_boundary_crossing": false
     }
   },
-  "write_full_forecasts": false,
+  "write_full_forecasts": true,
   "write_forecast_plots": true,
   "run_tracking": {
     "enabled": true,
-    "tag": "standard-real-mlp",
+    "tag": "stage-1-mlp-screening-1step",
     "history_root": "history",
     "copy_plots": true
   },
   "univariate": {
     "enabled": true,
     "scale_target": true,
+    "forecast_output_scale": "scaled",
     "arima": {
       "enabled": false,
       "order": [1, 0, 1],
+      "p_q_values_by_granularity": {},
+      "d_grid": [0, 1, 2],
       "season_length": 1,
       "seasonal_order": [0, 0, 0],
       "method": "CSS-ML"
+    },
+    "exponential_smoothing": {
+      "enabled": false,
+      "season_length": 1,
+      "variants": [
+        {"name": "ses_level", "model": "simple"},
+        {"name": "holt_trend", "model": "holt"},
+        {"name": "auto_ets_nonseasonal", "model": "auto_ets", "ets_model": "ZZN"}
+      ]
     },
     "mlp": {
       "enabled": true,
@@ -57,63 +332,24 @@
       "max_steps": 7500,
       "num_layers": 1,
       "batch_size": 1,
-      "windows_batch_size": 1024,
+      "windows_batch_size": 4096,
       "dataloader_num_workers": 0,
       "dataloader_pin_memory": true,
       "accelerator": "gpu",
       "devices": 1,
       "random_state": 42,
-      "selection_mode": "test_comparison",
-      "selected_candidate_combinations": [
+      "selection_mode": "stage_1_mlp_screening_1step",
+      "use_selected_candidate_combinations": false,
+      "use_selected_learning_rates": true,
+      "model_variants": [
         {
-          "granularity": "raw",
-          "difference_order": 1,
-          "transform_name": "first_difference",
-          "training_smoothing_window": "none",
-          "learning_rate_init": 0.0001,
-          "role": "best_short_horizon_baseline"
-        },
-        {
-          "granularity": "raw",
-          "difference_order": 2,
-          "transform_name": "second_difference",
-          "training_smoothing_window": "none",
-          "learning_rate_init": 0.0001,
-          "role": "raw_stationary_alternative"
-        },
-        {
-          "granularity": "30s",
-          "difference_order": 1,
-          "transform_name": "first_difference",
-          "training_smoothing_window": "none",
-          "learning_rate_init": 0.0001,
-          "role": "best_mid_granularity_candidate"
-        },
-        {
-          "granularity": "30s",
-          "difference_order": 0,
-          "transform_name": "level",
-          "training_smoothing_window": "none",
-          "learning_rate_init": 0.001,
-          "role": "30s_level_alternative"
-        },
-        {
-          "granularity": "1min",
-          "difference_order": 1,
-          "transform_name": "first_difference",
-          "training_smoothing_window": "none",
-          "learning_rate_init": 0.0001,
-          "role": "best_coarse_granularity_candidate"
-        },
-        {
-          "granularity": "1min",
-          "difference_order": 0,
-          "transform_name": "level",
-          "training_smoothing_window": "none",
-          "learning_rate_init": 0.01,
-          "role": "1min_level_alternative"
+          "name": "neuralforecast_single_hidden",
+          "engine": "neuralforecast",
+          "num_layers": 1,
+          "hidden_units_strategy": "match_lookback"
         }
       ],
+      "selected_candidate_combinations": [],
       "candidate_limit": null,
       "learning_rate_limit": null,
       "write_window_data": false
